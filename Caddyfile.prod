@@ -1,0 +1,27 @@
+# mcp.zeeker.sg — block for the host-level Caddy on the zeeker server.
+#
+# HOW TO DEPLOY
+# 1. Copy this block into the gitignored host Caddyfile (managed by the operator,
+#    not tracked in any repo).
+# 2. Reload the host Caddy: sudo systemctl reload caddy  (or equivalent)
+#
+# CLOUDFLARE: set mcp.zeeker.sg to DNS-only (grey cloud), not proxied.
+# Cloudflare's proxy can interfere with MCP's long-lived HTTP connections,
+# and orange-cloud would mask real client IPs from the rate limiter.
+
+mcp.zeeker.sg {
+    # Block known AI scrapers — keep in sync with the data.zeeker.sg block.
+    @scrapers header_regexp User-Agent `meta-externalagent|meta-webindexer|facebookexternalhit|FacebookBot`
+    respond @scrapers 403
+
+    reverse_proxy 127.0.0.1:8002 {
+        # OVERWRITE (not append) X-Forwarded-For with the direct client IP.
+        # The MCP server's in-memory rate limiter reads ip_prefix from this
+        # header; an appended chain would let clients spoof it.
+        header_up X-Forwarded-For {remote_host}
+
+        # Pass Origin through untouched. The OriginAllowlistMiddleware checks
+        # it to gate claude.ai / claude.com clients; Caddy must not strip it.
+        header_up Origin {http.request.header.Origin}
+    }
+}

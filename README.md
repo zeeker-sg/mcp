@@ -24,32 +24,47 @@ for in-development testing. Production uses `https://mcp.zeeker.sg/mcp`.
 
 ## Deployment
 
-The production topology runs the MCP container and a sibling Datasette container as
-Docker services on a shared `zeeker` bridge network, fronted by a host-level Caddy reverse
-proxy. Caddy is **not** in the compose file — it is a pre-existing host service managed by
-the operator. `docker compose up --build` starts the `mcp` and `datasette` services; the
-operator's Caddy routes external traffic to the `mcp` container's port 8000.
+Production topology on the zeeker host:
 
-### Caddy expectations (operator-managed)
+```
+internet → host Caddy (TLS, mcp.zeeker.sg) → 127.0.0.1:8002 → MCP container (:8000)
+```
 
-The operator must configure their Caddyfile to satisfy the following requirements. A
-Caddyfile is **not** checked into this repository — the operator authors their own block.
+The host runs a system-level (non-Docker) Caddy that owns ports 80/443 for all `*.zeeker.sg`
+domains. The MCP container binds only to `127.0.0.1:8002` on the loopback. No inner Docker
+Caddy, no cross-stack Docker networks.
 
-- **TLS termination.** Caddy terminates TLS for `mcp.zeeker.sg` and forwards plain HTTP to
-  the MCP container on port 8000 (or the host-mapped port).
-- **Route `/mcp` and `/healthz`** to the MCP container (e.g. `reverse_proxy /* mcp:8000`
-  or the equivalent host:port mapping if the container port is host-mapped).
-- **OVERWRITE `X-Forwarded-For`, do not append.** Caddy's default `reverse_proxy` behaviour
-  on a private upstream network is to overwrite the header rather than append to an existing
-  one. Verify this on the deployed instance by inspecting one log line: the `ip_prefix` field
-  must contain the requester's `/24`, not a chain of addresses. This is a security-relevant
-  detail — if Caddy appends instead of overwrites, a hostile client can spoof XFF and poison
-  the Phase 7 in-memory rate limiter.
-- **Forward the `Origin` header untouched.** The MCP server's `OriginAllowlistMiddleware`
-  validates it: a missing Origin is allowed (covers CLI clients and Anthropic's server-side
-  proxy), `https://claude.ai` and `https://claude.com` are allowed, anything else returns
-  403. If Caddy strips or rewrites the Origin header, allowlisted Claude clients will be
-  rejected.
+### Deploying on the zeeker host
+
+1. **Start the stack.** A gitignored `docker-compose.override.yml` is present on the server
+   that sets `ports: ["127.0.0.1:8002:8000"]` and `UPSTREAM_URL: https://data.zeeker.sg`.
+   Docker Compose merges it automatically:
+
+   ```sh
+   docker compose up --build -d
+   ```
+
+2. **Wire the host Caddy.** Copy the block from `Caddyfile.prod` into the operator's gitignored
+   host Caddyfile, then reload:
+
+   ```sh
+   sudo systemctl reload caddy
+   ```
+
+   The block configures TLS, bot-scraper rejection, and the `X-Forwarded-For` / `Origin`
+   header rules described below.
+
+### Caddy header requirements
+
+These rules are baked into `Caddyfile.prod` and apply to any reverse proxy configuration:
+
+- **OVERWRITE `X-Forwarded-For`, do not append.** The MCP server's in-memory rate limiter
+  reads `ip_prefix` from this header. An appended chain lets clients spoof it and bypass the
+  rate limiter.
+- **Forward the `Origin` header untouched.** The `OriginAllowlistMiddleware` checks it to
+  gate `claude.ai` / `claude.com` clients; a missing Origin is allowed (covers CLI clients
+  and Anthropic's server-side proxy), anything else returns 403. If Caddy strips or rewrites
+  the Origin header, allowlisted Claude clients will be rejected.
 
 ### Single-worker constraint
 
@@ -62,11 +77,12 @@ same problem — do not use it.
 
 ### `UPSTREAM_URL`
 
-`UPSTREAM_URL` must point at the Datasette container's internal docker-network URL (default
-`http://datasette:8001`) when both containers share the `zeeker` network. Do **not** point
-`UPSTREAM_URL` at the public `https://data.zeeker.sg` URL in sibling-container production
-deployments — that routes traffic out through the public internet and back (hairpin routing)
-unnecessarily. Use the internal docker-network address so traffic stays on the bridge.
+In local dev (`docker compose up` with no override) the default `http://datasette:8001`
+reaches the sibling dev container on the shared `zeeker` bridge.
+
+In production on the zeeker host, `UPSTREAM_URL` is set to `https://data.zeeker.sg` in the
+gitignored `docker-compose.override.yml`. The MCP container has no shared Docker network
+with the zeeker-datasette stack, so the public URL is the correct target.
 
 ### Anthropic IP allowlist (forward-looking)
 
