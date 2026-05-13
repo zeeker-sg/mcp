@@ -34,6 +34,17 @@ def _tables_payload(names: list[str]) -> dict:
     return {"tables": [{"name": n} for n in names]}
 
 
+def _tables_payload_with_hidden(visible: list[str], hidden: list[str]) -> dict:
+    """Build a Datasette /{db}.json payload with explicit hidden flags.
+
+    visible: table names that should have hidden=False
+    hidden: table names that should have hidden=True (upstream FTS/aux tables)
+    """
+    rows = [{"name": n, "hidden": False, "count": None, "columns": [], "primary_keys": []} for n in visible]
+    rows += [{"name": n, "hidden": True, "count": None, "columns": [], "primary_keys": []} for n in hidden]
+    return {"tables": rows}
+
+
 @pytest.fixture
 def bound_client(httpx_mock: pytest_httpx.HTTPXMock):
     """Bind a DatasetteClient to the current context for the duration of the test."""
@@ -103,3 +114,39 @@ async def test_list_databases_propagates_upstream_failure(
 async def test_list_databases_stubs_are_unregistered() -> None:
     """Retired: Phase 2 implemented list_tables. See tests/tools/test_list_tables.py."""
     pass
+
+
+async def test_list_databases_table_count_excludes_upstream_hidden(
+    httpx_mock: pytest_httpx.HTTPXMock, bound_client: DatasetteClient
+) -> None:
+    """CR-02 regression: list_databases table_count must exclude upstream hidden=True tables.
+
+    sglawwatch gets 2 visible tables, 2 config-HIDDEN_TABLES entries, and 2 upstream-hidden
+    FTS aux tables. Expected table_count == 2 (not 4 which would be the result without
+    checking t.hidden).
+    """
+    for db in config.ALLOWED_DATABASES:
+        if db == "sglawwatch":
+            # 2 visible + 2 config-hidden + 2 upstream-hidden
+            httpx_mock.add_response(
+                url=_db_url(db),
+                json=_tables_payload_with_hidden(
+                    visible=["headlines", "commentaries", "metadata", "schema_versions"],
+                    hidden=["headlines_fts", "headlines_fts_content"],
+                ),
+            )
+        else:
+            httpx_mock.add_response(
+                url=_db_url(db),
+                json=_tables_payload(["t1", "t2", "t3"]),
+            )
+
+    envelope = await list_databases()
+
+    sglawwatch_row = next(r for r in envelope.data if r["name"] == "sglawwatch")
+    # 2 upstream-hidden (fts) + 2 config-HIDDEN_TABLES (metadata, schema_versions) filtered out
+    # → only "headlines" and "commentaries" remain
+    assert sglawwatch_row["table_count"] == 2, (
+        f"Expected 2 visible tables for sglawwatch, got {sglawwatch_row['table_count']}. "
+        "list_databases must exclude both upstream hidden=True and config.HIDDEN_TABLES entries."
+    )

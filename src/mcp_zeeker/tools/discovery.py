@@ -157,8 +157,11 @@ async def list_databases() -> Envelope:
     )
     rows = []
     for name, summary in zip(config.ALLOWED_DATABASES, summaries, strict=True):
-        hidden = config.HIDDEN_TABLES.get(name, set())
-        visible_count = sum(1 for t in summary.tables if t.name not in hidden)
+        hidden_set = config.HIDDEN_TABLES.get(name, set())
+        visible_count = sum(
+            1 for t in summary.tables
+            if not t.hidden and t.name not in hidden_set
+        )
         rows.append(
             {
                 "name": name,
