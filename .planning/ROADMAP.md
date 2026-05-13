@@ -61,7 +61,7 @@ Plans:
 Plans:
 - [x] 02-01-PLAN.md — Foundation: config.py extensions + MetadataCache + config_lookup + DatasetteClient column-types + lifespan binding + Wave-0 test stubs + conftest fixtures
 - [x] 02-02-PLAN.md — Tools: list_tables + describe_table @mcp.tool implementations + shared _visible_tables/_resolve_table/raise_unknown_* helpers + Envelope.for_table_list + TableSchema + DISC-05 side-channel test
-- [ ] 02-03-PLAN.md — Tail: F-1 proxy-headers regression test + F-3 stateless_http session regression tests + tests/manual/PHASE2-CLIENT-VERIFY.md with F-4 dry-run obligation
+- [x] 02-03-PLAN.md — Tail: F-1 proxy-headers regression test + F-3 stateless_http session regression tests + tests/manual/PHASE2-CLIENT-VERIFY.md with F-4 dry-run obligation
 **UI hint**: no
 **Research flag**: standard patterns — `/gsd-research-phase` optional
 
