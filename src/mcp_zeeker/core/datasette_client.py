@@ -38,31 +38,54 @@ _current: contextvars.ContextVar[DatasetteClient | None] = contextvars.ContextVa
 
 
 class DatasetteClient:
-    """Typed async wrapper around httpx.AsyncClient for upstream Datasette calls."""
+    """Typed async wrapper around httpx.AsyncClient for upstream Datasette calls.
+
+    Two-tier resolution (test-friendly contextvar AND production-correct singleton):
+    - Tests: `DatasetteClient.bind(...)` sets a contextvar token — scoped to the
+      current async task so parallel pytest cases stay isolated.
+    - Production: `bind()` ALSO stores the client in a process-wide class attribute.
+      The Starlette lifespan binds once at startup; per-request handler tasks read
+      via `current()` which falls back to the class attribute when the contextvar
+      is empty (it is, because contextvars don't propagate from the lifespan task
+      to request tasks). Matches D-14 "single process-lifetime client" semantics.
+    """
+
+    _singleton: DatasetteClient | None = None
 
     def __init__(self, http: httpx.AsyncClient) -> None:
         self._http = http
 
     @classmethod
     def current(cls) -> DatasetteClient:
-        """Return the DatasetteClient bound to the current context.
-
-        Raises RuntimeError if called outside a bind() scope.
-        """
+        """Return the DatasetteClient bound to the current context, or the
+        process-wide singleton. Raises RuntimeError if neither is set."""
         client = _current.get()
-        if client is None:
-            raise RuntimeError("DatasetteClient.current() called outside a bound scope")
-        return client
+        if client is not None:
+            return client
+        if cls._singleton is not None:
+            return cls._singleton
+        raise RuntimeError("DatasetteClient.current() called outside a bound scope")
 
     @classmethod
     def bind(cls, client: DatasetteClient) -> contextvars.Token:
-        """Bind a DatasetteClient to the current context. Returns a Token for reset()."""
+        """Bind a DatasetteClient. Sets BOTH the per-task contextvar (test isolation)
+        and the process-wide singleton (production cross-task reads). Returns the
+        contextvar Token for `reset()`."""
+        cls._singleton = client
         return _current.set(client)
 
     @classmethod
     def reset(cls, token: contextvars.Token) -> None:
-        """Restore the previous binding (LIFO). Call with the Token from bind()."""
+        """Restore the previous contextvar binding (LIFO). The process-wide
+        singleton is intentionally NOT cleared — clearing it would require a
+        separate `clear_singleton()` call (used in test teardown if needed)."""
         _current.reset(token)
+
+    @classmethod
+    def clear_singleton(cls) -> None:
+        """Clear the process-wide singleton. Test-teardown only — production
+        relies on the singleton living for the full process lifetime."""
+        cls._singleton = None
 
     async def _request_with_retry(self, method: str, url: str, **kw) -> httpx.Response:
         """Execute HTTP request with retry-once-with-jitter on 502/503 (D-16).
