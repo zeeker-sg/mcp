@@ -42,7 +42,7 @@ Plans:
 - [x] 01-03-PLAN.md — Transport stack: FastMCP server + Starlette app + middleware (request_id/origin/access_log) + structlog + httpx lifecycle
 - [x] 01-04-PLAN.md — DatasetteClient with retry + list_databases tool + 6 Pydantic input model drafts + NotImplementedError stubs
 - [x] 01-05-PLAN.md — Contract & smoke suite: registry-introspection, in-memory MCP smoke, uvicorn random-port smoke, Origin matrix, structlog OBS-01..05
-- [ ] 01-06-PLAN.md — Deploy: Dockerfile + docker-compose + README "Deployment" prose + manual TRANSPORT-05 checklist for Claude Desktop + Claude Code
+- [x] 01-06-PLAN.md — Deploy: Dockerfile + docker-compose + README "Deployment" prose + manual TRANSPORT-05 checklist for Claude Desktop + Claude Code
 **UI hint**: no
 **Research flag**: standard patterns — `/gsd-research-phase` optional
 
