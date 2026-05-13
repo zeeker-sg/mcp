@@ -1,33 +1,20 @@
-# Caddy is NOT in this compose file — it's a pre-existing host service.
-# See README "Deployment" section for expected Caddy configuration.
-#
-# NOTE: The 'datasette' service here exists for local development only.
-# In production, the operator runs their own datasette container (or points
-# UPSTREAM_URL at data.zeeker.sg directly). This compose file becomes
-# mcp-only when the operator manages datasette separately.
+# Production deployment for this Contabo host.
+# Caddy is NOT in this compose file — it's the host systemd Caddy at /etc/caddy/Caddyfile.
+# Datasette is NOT in this compose file — the operator-managed zeeker-datasette
+# stack already runs at https://data.zeeker.sg; we join its docker network as external.
 
 services:
   mcp:
     build: .
+    container_name: zeeker-mcp
     environment:
-      UPSTREAM_URL: http://datasette:8001
+      UPSTREAM_URL: http://zeeker-datasette:8001
       USER_AGENT: mcp-zeeker/0.1
     ports:
-      - "8000:8000"
-    networks: [zeeker]
-    depends_on:
-      datasette:
-        condition: service_started
-    restart: unless-stopped
-
-  datasette:
-    image: datasetteproject/datasette:latest
-    # Operator manages this container in production; this entry is for
-    # local-dev smoke only. In production, point UPSTREAM_URL at the
-    # operator-managed datasette container's docker-network address.
-    networks: [zeeker]
+      - "127.0.0.1:8002:8000"
+    networks: [zeeker-datasette_default]
     restart: unless-stopped
 
 networks:
-  zeeker:
-    driver: bridge
+  zeeker-datasette_default:
+    external: true

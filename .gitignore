@@ -40,3 +40,6 @@ dist/
 
 # Local environment overrides — copy .env.example to .env for dev
 .env
+
+# Local production compose override
+docker-compose.override.yml
