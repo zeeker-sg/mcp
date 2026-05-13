@@ -42,6 +42,7 @@ from fastmcp.tools.tool import ToolAnnotations
 from pydantic import Field
 
 from mcp_zeeker import config
+from mcp_zeeker.core.config_lookup import url_column_for
 from mcp_zeeker.core.cursor import canonical_shape_str, decode_cursor, encode_cursor
 from mcp_zeeker.core.datasette_client import DatasetteClient, UpstreamCallFailed
 from mcp_zeeker.core.envelope import Envelope, Pagination
@@ -49,7 +50,9 @@ from mcp_zeeker.core.filter_compiler import Filter, compile_filters
 from mcp_zeeker.core.visibility import (
     _resolve_table,
     _visible_columns,
+    raise_not_found,
     raise_unknown_column,
+    raise_unsupported_table_for_fetch,
 )
 from mcp_zeeker.server import mcp
 
@@ -294,6 +297,118 @@ async def query_table(
     )
 
 
-async def fetch(database: str, table: str, url: str) -> Envelope:
-    """Stub — fetch is registered in Phase 3 Plan 03-04 (URL-keyed fetch)."""
-    raise NotImplementedError("fetch is registered in Phase 3 (URL-keyed fetch)")
+# D3-16: fetch tool description. MUST end with config.TOOL_TRAILER (INJ-01 /
+# ANNO-02) and mention the rate-limit literal (ANNO-03). Plan 03-04 ships this
+# verbatim — exact-match discipline + "no normalization" wording satisfies the
+# acceptance grep (`'exact string equality' in desc.lower()` OR `'no normalization'`).
+_FETCH_DESCRIPTION = (
+    "Fetch a single row by its URL from a URL-keyed table on data.zeeker.sg. "
+    "URL match is exact string equality (no normalization). Returns non-heavy, "
+    "non-fragment columns only; use query_table on the matching *_fragments "
+    "table for paragraph-level content. Rate limits: 20/burst, 60/minute, "
+    "5000/day per IP. " + config.TOOL_TRAILER
+)
+
+
+@mcp.tool(
+    name="fetch",
+    description=_FETCH_DESCRIPTION,
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
+async def fetch(
+    database: Annotated[str, Field(description="Database name")],
+    table: Annotated[str, Field(description="Table name (must be URL-keyed)")],
+    url: Annotated[
+        str,
+        Field(
+            description=(
+                "Exact URL to look up. No silent normalization — "
+                "'?utm=...' is treated as a different URL and will not match."
+            )
+        ),
+    ],
+) -> Envelope:
+    """Fetch a single row by exact URL match (D3-13 / D3-14 / D3-15 / D3-16).
+
+    Validation order (D3-14):
+      1. _resolve_table — unknown_database / unknown_table (shared with query_table).
+      2. url_column_for(database, table) — None means table is not URL-keyed
+         → raise_unsupported_table_for_fetch (FETCH-04). NO upstream call.
+      3. Datasette query: `?<url_col>__exact=<url>&_size=2` — `_size=2` lets
+         us detect multi-match without fetching the whole result set.
+      4. len(rows) == 0 → raise_not_found (FETCH-05). The URL is NOT a param
+         to raise_not_found (INJ-05) — error message is a fixed literal.
+      5. Column projection: emit_cols = (visible - HEAVY_COLUMNS) - {parent_fk}.
+         `visible` already excludes hidden columns (HIDDEN_COLUMNS["*"], e.g. `id`).
+         For fragment tables (currently unreachable via fetch because none are in
+         URL_COLUMNS), the parent_fk would also be stripped — defensive coverage.
+      6. len(rows) > 1 → log.warning("fetch_ambiguous_url", database=..., table=...,
+         match_count=...). URL is NEVER bound (INJ-05). Return the FIRST row.
+      7. Reshape row to emit_cols (sorted) and wrap in Envelope.for_rows — no
+         pagination (single-row response).
+    """
+    # Step 1: shared table-existence gate (D2-15 — hidden + nonexistent share
+    # one emission point, counter-patched in 03-02).
+    await _resolve_table(database, table)
+
+    # Step 2: URL_COLUMNS lookup. Single call-site for the URL_COLUMNS dict
+    # (Plan 03-04 / D2-10 mirror discipline). None → table is not URL-keyed,
+    # raise BEFORE issuing any table-row upstream call (FETCH-04).
+    url_col = url_column_for(database, table)
+    if url_col is None:
+        raise_unsupported_table_for_fetch(database, table)
+
+    # Step 3: exact-match upstream query. `_size=2` is the multi-match detector;
+    # we never need more than 2 rows to distinguish "single" / "ambiguous".
+    params: list[tuple[str, str]] = [(f"{url_col}__exact", url), ("_size", "2")]
+    try:
+        result = await DatasetteClient.current().get_table_rows(database, table, params)
+    except UpstreamCallFailed:
+        raise ToolError("upstream_unavailable: upstream call failed") from None
+
+    rows = result.get("rows", []) or []
+
+    # Step 4: zero rows → not_found (FETCH-05 / INJ-05). raise_not_found takes
+    # ONLY (database, table) — the URL is NOT an argument. The threat-model
+    # grep (T-03-15) enforces this from the visibility-helper side.
+    if not rows:
+        raise_not_found(database, table)
+
+    # Step 5: compute the emit column set. `visible` is _visible_columns() which
+    # ALREADY excludes hidden columns (HIDDEN_COLUMNS["*"], e.g. `id`). Drop
+    # HEAVY_COLUMNS (FETCH-03 "non-heavy"); also drop the fragment FK if this
+    # table is a fragment-parent key in FRAGMENT_PARENTS (defensive — no
+    # currently-URL-keyed table is a fragments table, so this is a no-op for
+    # production config but guards against future config drift).
+    visible = await _visible_columns(database, table)
+    fk_to_exclude: set[str] = set()
+    fragment_meta = config.FRAGMENT_PARENTS.get(f"{database}.{table}")
+    if fragment_meta is not None:
+        fk_to_exclude.add(fragment_meta["parent_fk"])
+    emit_cols = (visible - config.HEAVY_COLUMNS) - fk_to_exclude
+
+    # Step 6: multi-match path. Emit a structured WARNING — bind ONLY identifier
+    # parameters and the match count. Never bind `url` (INJ-05 / T-03-16). The
+    # threat-model grep enforces absence of `url=` on the fetch_ambiguous_url
+    # log line.
+    if len(rows) > 1:
+        log.warning(
+            "fetch_ambiguous_url",
+            database=database,
+            table=table,
+            match_count=len(rows),
+        )
+
+    # Step 7: reshape the first row into a single emit_cols-keyed dict.
+    # `sorted(emit_cols)` gives deterministic key order — useful for snapshot
+    # tests. Skip columns that are absent from the upstream response (sparse
+    # row fields cope gracefully).
+    first = rows[0]
+    row_dict = {c: first[c] for c in sorted(emit_cols) if c in first}
+
+    # Step 8: single-row envelope. No pagination — fetch never paginates.
+    return Envelope.for_rows(database=database, table=table, rows=[row_dict])
