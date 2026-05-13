@@ -102,12 +102,16 @@ def test_log_fields_locked():
     )
 
 
-def test_hidden_tables_initial():
-    """PRD §9.1: sglawwatch has metadata and schema_versions hidden; others return empty set."""
-    assert config.HIDDEN_TABLES["sglawwatch"] == {"metadata", "schema_versions"}
-    assert config.HIDDEN_TABLES.get("zeeker-judgements", set()) == set()
-    assert config.HIDDEN_TABLES.get("pdpc", set()) == set()
-    assert config.HIDDEN_TABLES.get("sg-gov-newsrooms", set()) == set()
+def test_hidden_tables_phase2():
+    """D2-09: Phase 2 extended HIDDEN_TABLES — all DBs have platform-internal tables hidden;
+    sglawwatch also retains legacy metadata/schema_versions."""
+    # All four DBs include platform-internal tables
+    for db in config.ALLOWED_DATABASES:
+        assert "_zeeker_schemas" in config.HIDDEN_TABLES[db], f"_zeeker_schemas missing from {db}"
+        assert "_zeeker_updates" in config.HIDDEN_TABLES[db], f"_zeeker_updates missing from {db}"
+    # sglawwatch retains legacy entries
+    assert "metadata" in config.HIDDEN_TABLES["sglawwatch"]
+    assert "schema_versions" in config.HIDDEN_TABLES["sglawwatch"]
 
 
 def test_origin_allowlist_initial():
