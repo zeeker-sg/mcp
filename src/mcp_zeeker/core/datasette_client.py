@@ -150,3 +150,31 @@ class DatasetteClient:
             raw_defn = row[defn_idx]
             result[table_name] = json.loads(raw_defn) if isinstance(raw_defn, str) else {}
         return result
+
+    async def get_table_rows(
+        self,
+        database: str,
+        table: str,
+        params: list[tuple[str, str]],
+    ) -> dict:
+        """Fetch rows from /{database}/{table}.json with the given query params (D3-14).
+
+        Always prepends `_shape=objects` so the response `rows` field is a list of
+        dicts (not the column-array shape Datasette defaults to). This is the
+        upstream HTTP path consumed by Phase 3's query_table and fetch handlers.
+
+        Retry semantics inherited from `_request_with_retry`: one retry with
+        jitter on 502/503; immediate UpstreamCallFailed on 504, transport error,
+        or non-2xx after retry (D-16). The handler maps the exception to
+        `upstream_unavailable` in the envelope.
+
+        Returns the raw parsed JSON dict — keys include `rows`, `columns`,
+        `next`, `truncated`, `filtered_table_rows_count`. The handler unpacks
+        and re-shapes per D3-04 (heavy columns under `retrieved_content`).
+        """
+        resp = await self._request_with_retry(
+            "GET",
+            f"/{database}/{table}.json",
+            params=[("_shape", "objects"), *params],
+        )
+        return resp.json()
