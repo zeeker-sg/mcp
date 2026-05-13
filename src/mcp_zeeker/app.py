@@ -27,7 +27,13 @@ configure_logging()
 # Build the FastMCP HTTP app once at import time.
 # path="/" because we mount the whole thing under /mcp below; FastMCP
 # would otherwise prepend its default streamable_http_path.
-mcp_app = mcp.http_app(path="/")
+#
+# stateless_http=True per TRANSPORT-03: no per-client session state. Every
+# tool call is a clean request/response cycle. Without this, FastMCP issues
+# Mcp-Session-Id headers and rejects subsequent calls with 404 "Session not
+# found" after a container restart — which breaks every long-lived MCP client
+# (Claude Desktop's mcp-remote bridge, Claude Code) on every redeploy.
+mcp_app = mcp.http_app(path="/", stateless_http=True)
 
 
 @contextlib.asynccontextmanager
