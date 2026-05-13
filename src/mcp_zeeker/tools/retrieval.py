@@ -153,6 +153,18 @@ async def query_table(
     # T-03-09: rejecting limit=201 before issuing any upstream request. The
     # message is a FIXED literal (no f-string interpolation of limit value) —
     # mirrors the D3-09 / INJ-05 discipline used in compile_filters.
+    #
+    # WR-02 / D3-12 note: `limit` is not a filter clause but `invalid_filter_op`
+    # is still the catalog code we emit here. The PRD §12 error-code catalog
+    # is LOCKED to six entries (unknown_database, unknown_table, unknown_column,
+    # invalid_filter_op, invalid_cursor, unsupported_table_for_fetch, not_found)
+    # — extending it requires a planning re-loop, not a code-fix. The catalog
+    # extension to `invalid_limit` is deferred to Phase 7 (ERR-02), where the
+    # whole catalog gets revisited. Until then, log/metrics consumers grepping
+    # on `invalid_filter_op:` should rely on the message suffix
+    # ("limit must be between") to disambiguate. The Pydantic Field(ge=1, le=200)
+    # gate above is the dominant code path in production; this branch is only
+    # reachable from direct Python callers and is intentionally chatty.
     if limit < 1 or limit > config.MAX_QUERY_LIMIT:
         raise ToolError("invalid_filter_op: limit must be between 1 and 200")
 
