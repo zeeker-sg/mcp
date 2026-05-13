@@ -20,7 +20,7 @@ import pytest_httpx
 
 from mcp_zeeker import config
 from mcp_zeeker.core.datasette_client import DatasetteClient, UpstreamCallFailed
-from mcp_zeeker.tools.discovery import list_databases, list_tables
+from mcp_zeeker.tools.discovery import list_databases
 
 
 def _db_url(name: str) -> str:
@@ -99,7 +99,7 @@ async def test_list_databases_propagates_upstream_failure(
         await list_databases()
 
 
+@pytest.mark.skip(reason="Phase 2 implements list_tables — see test_list_tables.py")
 async def test_list_databases_stubs_are_unregistered() -> None:
-    """D-01: list_tables (Phase 2) raises NotImplementedError — not yet registered."""
-    with pytest.raises(NotImplementedError, match="Phase 2"):
-        await list_tables("zeeker-judgements")
+    """Retired: Phase 2 implemented list_tables. See tests/tools/test_list_tables.py."""
+    pass

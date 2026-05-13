@@ -70,6 +70,29 @@ class Envelope(BaseModel):
         )
 
     @classmethod
+    def for_table_list(cls, *, database: str, rows: list[dict]) -> Envelope:
+        """Factory for list_tables responses (DISC-02).
+
+        D2-06: provenance scoped to a single database; table is None because
+        this response spans all visible tables in the DB.
+        License: config.LICENSES.get(database, "") — empty string in Phase 1;
+        Phase 6 ENV-03 will wire MetadataCache-driven license strings.
+        Open Q3 (RESEARCH): license value will be wired from MetadataCache in Phase 6.
+        D-09: retrieved_at is wallclock UTC at call time.
+        """
+        return cls(
+            data=rows,
+            provenance=Provenance(
+                source="data.zeeker.sg",
+                database=database,
+                table=None,
+                retrieved_at=datetime.now(tz=UTC),
+                license=config.LICENSES.get(database, ""),
+                attribution=config.DEFAULT_ATTRIBUTION,
+            ),
+        )
+
+    @classmethod
     def for_rows(
         cls,
         *,
