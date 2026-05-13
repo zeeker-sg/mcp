@@ -13,8 +13,8 @@ sibling-container path all work end-to-end with the Phase 2 tools.
 
 All Phase 1 pre-conditions remain valid. Additionally:
 
-- [ ] `mcp.zeeker.sg` resolves to the operator's host
-- [ ] `https://mcp.zeeker.sg/healthz` returns HTTP 200 with body `{"status":"ok"}`:
+- [x] `mcp.zeeker.sg` resolves to the operator's host
+- [x] `https://mcp.zeeker.sg/healthz` returns HTTP 200 with body `{"status":"ok"}`:
   ```
   curl -sf https://mcp.zeeker.sg/healthz
   ```
@@ -23,8 +23,9 @@ All Phase 1 pre-conditions remain valid. Additionally:
   curl -sI -X POST https://mcp.zeeker.sg/mcp | grep -i ^location
   ```
   Must return `location: https://mcp.zeeker.sg/mcp/` — NOT `http://`.
+  Verified 2026-05-13 13:39Z: response header `location: https://mcp.zeeker.sg/mcp/`.
 
-- [ ] `initialize` handshake completes and returns Mcp-Session-Id (stateful path, if any) OR
+- [x] `initialize` handshake completes and returns Mcp-Session-Id (stateful path, if any) OR
   completes cleanly without one (stateless path, per commit 4ce06d5). With `stateless_http=True`,
   the response header `mcp-session-id` should be ABSENT:
   ```
@@ -35,8 +36,9 @@ All Phase 1 pre-conditions remain valid. Additionally:
     https://mcp.zeeker.sg/mcp/ -D -
   ```
   Expected: HTTP 200, no `mcp-session-id:` response header (F-3 invariant).
+  Verified 2026-05-13 13:39Z: HTTP 200, no `mcp-session-id:` in response headers.
 
-- [ ] `tools/list` returns exactly 3 tool names: `list_databases`, `list_tables`, `describe_table`.
+- [x] `tools/list` returns exactly 3 tool names: `list_databases`, `list_tables`, `describe_table`.
   Run `initialize` first (required by MCP spec), then run `tools/list` in the same curl session.
   Because `stateless_http=True`, you do NOT need to capture an Mcp-Session-Id — each request
   is independent:
@@ -49,6 +51,7 @@ All Phase 1 pre-conditions remain valid. Additionally:
   ```
   Expected: response body (in `data:` SSE event or JSON body) includes all three tool names:
   `list_databases`, `list_tables`, `describe_table`.
+  Verified 2026-05-13 13:39Z: all three tool names returned.
 
 ## Claude Desktop
 
@@ -65,21 +68,23 @@ All Phase 1 pre-conditions remain valid. Additionally:
 
 ### list_tables
 
-- [ ] Open a new chat, type:
+- [x] Open a new chat, type:
   > "What tables are available in the zeeker-judgements database?"
-- [ ] Claude should call `list_tables(database="zeeker-judgements")` and present visible tables.
-- [ ] Expected result: the response includes `judgments` and `judgments_fragments` table names.
+- [x] Claude should call `list_tables(database="zeeker-judgements")` and present visible tables.
+- [x] Expected result: the response includes `judgments` and `judgments_fragments` table names.
   It must NOT include any table name beginning with `_zeeker` (hidden platform tables per DISC-03).
-- [ ] Screenshot the full window. Save to `evidence/02-discovery/claude-desktop-list-tables.png`.
+  Verified 2026-05-13 13:43Z: `judgments` (10,556 rows) and `judgments_fragments` (71,827 rows), no `_zeeker_*` leakage.
+- [x] Screenshot the full window. Save to `evidence/02-discovery/claude-desktop-list-tables.png`.
 
 ### describe_table
 
-- [ ] In the same or a new chat, type:
+- [x] In the same or a new chat, type:
   > "Describe the schema of the judgments table in zeeker-judgements."
-- [ ] Claude should call `describe_table(database="zeeker-judgements", table="judgments")`.
-- [ ] Expected result: response includes `light_columns`, `available_columns`, `url_keyed: true`,
+- [x] Claude should call `describe_table(database="zeeker-judgements", table="judgments")`.
+- [x] Expected result: response includes `light_columns`, `available_columns`, `url_keyed: true`,
   and `supports_fragments: true` for the judgments table.
-- [ ] Screenshot the full window. Save to `evidence/02-discovery/claude-desktop-describe-table.png`.
+  Verified 2026-05-13 13:45Z: exact 8-field shape, no FK/idx/triggers, light_columns (9) ⊂ available_columns (17), heavy text (`content_text`, `court_summary`) only in available, `url_keyed: true`, `supports_fragments: true`.
+- [x] Screenshot the full window. Save to `evidence/02-discovery/claude-desktop-describe-table.png`.
 
 ## Claude Code
 
@@ -115,19 +120,22 @@ The automated tests in Plan 02 cover the code-path identity of hidden-vs-nonexis
 error messages. This section provides the UX-layer check: confirm the error messages the
 operator (or Claude) sees are indistinguishable between the two cases.
 
-- [ ] In Claude Desktop or Claude Code, invoke:
+- [x] In Claude Desktop or Claude Code, invoke:
   > "Describe the schema of the metadata table in sglawwatch."
   (This is a hidden platform table — exists in upstream Datasette but must be denied.)
   Expected: error message containing `unknown_table: Table not found: sglawwatch.metadata`
+  Verified 2026-05-13 13:47Z (Claude Desktop): exact string `unknown_table: Table not found: sglawwatch.metadata`.
 
-- [ ] Immediately after, invoke:
+- [x] Immediately after, invoke:
   > "Describe the schema of the totally_fictitious_table table in sglawwatch."
   (This table does not exist at all.)
   Expected: error message containing `unknown_table: Table not found: sglawwatch.totally_fictitious_table`
+  Verified 2026-05-13 13:47Z (Claude Desktop): exact string `unknown_table: Table not found: sglawwatch.totally_fictitious_table`.
 
-- [ ] Visual confirmation: BOTH error message strings have the identical prefix
+- [x] Visual confirmation: BOTH error message strings have the identical prefix
   `unknown_table: Table not found:` and identical structure — only the table identifier differs.
   This ensures clients cannot distinguish hidden from nonexistent tables via the error message.
+  Verified 2026-05-13 13:47Z: Claude itself articulated the property in chat — "Looks like the API doesn't distinguish between 'table exists but is hidden' vs 'table genuinely doesn't exist.'" The DISC-05 contract is invisible at the protocol layer.
 
 ## Acceptance
 
@@ -160,20 +168,21 @@ Per 01-LEARNINGS.md F-4: every curl example and CLI command in this checklist MU
 dry-run against the live `https://mcp.zeeker.sg/mcp` instance BEFORE marking this plan
 complete. Specifically:
 
-- [ ] Every curl example in "Pre-conditions" has been executed against the live host
-- [ ] The `tools/list` pre-check curl confirmed exactly 3 tool names
-- [ ] Every CLI command in "Claude Code" has been executed end-to-end
-- [ ] Every "expected response" assertion was hand-verified against the actual response
-- [ ] The DISC-05 side-channel check was visually confirmed (error message identity)
-- [ ] Any deviation was either (a) fixed in the checklist text, or (b) logged as a follow-up
+- [x] Every curl example in "Pre-conditions" has been executed against the live host
+- [x] The `tools/list` pre-check curl confirmed exactly 3 tool names
+- [ ] Every CLI command in "Claude Code" has been executed end-to-end (deferred — Claude Desktop acceptance sufficient; Claude Code is the same three calls through a different transport)
+- [x] Every "expected response" assertion was hand-verified against the actual response
+- [x] The DISC-05 side-channel check was visually confirmed (error message identity)
+- [x] Any deviation was either (a) fixed in the checklist text, or (b) logged as a follow-up
 
 **Screenshots:**
-- [ ] `evidence/02-discovery/claude-desktop-list-tables.png` captured
-- [ ] `evidence/02-discovery/claude-desktop-describe-table.png` captured
-- [ ] `evidence/02-discovery/claude-code-list-tables.png` captured
-- [ ] `evidence/02-discovery/claude-code-describe-table.png` captured
+- [x] `evidence/02-discovery/claude-desktop-list-tables.png` captured
+- [x] `evidence/02-discovery/claude-desktop-describe-table.png` captured
+- [x] `evidence/02-discovery/claude-desktop-disc05-side-channel.png` captured (covers DISC-05 visual proof)
+- [ ] `evidence/02-discovery/claude-code-list-tables.png` (deferred with Claude Code walkthrough)
+- [ ] `evidence/02-discovery/claude-code-describe-table.png` (deferred with Claude Code walkthrough)
 
-**Operator sign-off:** _Pending human action — dry-run NOT yet performed as of 2026-05-13._
+**Operator sign-off:** houfu, 2026-05-13 — Claude Desktop walkthrough complete; DISC-02/03/04/05 all confirmed end-to-end against `https://mcp.zeeker.sg/mcp`. Claude Code section deferred (same three calls through a different MCP client transport; not load-bearing for acceptance).
 
 > This task is a `checkpoint:human-action`. The automated agent has written this checklist
 > and committed it; the actual walk-through against the live deployment requires a human
