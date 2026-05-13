@@ -22,6 +22,7 @@ Covers (per 03-VALIDATION.md):
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 import pytest
@@ -39,14 +40,22 @@ def _db_url(name: str) -> str:
     return f"{base}/{name}.json"
 
 
-def _zeeker_schemas_url(db: str) -> str:
-    base = config.UPSTREAM_URL.rstrip("/")
-    return f"{base}/{db}/_zeeker_schemas.json"
-
-
 def _table_url(database: str, table: str) -> str:
+    """Plain URL string (no query) — used for the FETCH-04 no-upstream-call check."""
     base = config.UPSTREAM_URL.rstrip("/")
     return f"{base}/{database}/{table}.json"
+
+
+def _table_url_re(database: str, table: str) -> re.Pattern[str]:
+    """Regex matcher for /{database}/{table}.json with any query string.
+
+    pytest_httpx 0.36 matches add_response(url=str) on the FULL URL (including
+    query params). fetch always issues at least `_shape=objects&<col>__exact=…`,
+    so we need a regex matcher to keep tests agnostic to the exact query string
+    (mirrors test_query_table._table_url_re).
+    """
+    base = re.escape(config.UPSTREAM_URL.rstrip("/"))
+    return re.compile(rf"^{base}/{re.escape(database)}/{re.escape(table)}\.json(\?.*)?$")
 
 
 def _metadata_url() -> str:
@@ -90,20 +99,6 @@ def _judgments_db_payload() -> dict:
                 "primary_keys": [],
             },
         ]
-    }
-
-
-def _empty_schema_payload() -> dict:
-    return {
-        "columns": [
-            "resource_name",
-            "schema_version",
-            "schema_hash",
-            "column_definitions",
-            "created_at",
-            "updated_at",
-        ],
-        "rows": [],
     }
 
 
@@ -163,7 +158,15 @@ async def datasette_client(httpx_mock: pytest_httpx.HTTPXMock):
 
 @pytest.fixture
 async def metadata_cache(httpx_mock: pytest_httpx.HTTPXMock):
-    httpx_mock.add_response(url=_metadata_url(), json={"databases": {}}, is_reusable=True)
+    # is_optional=True: fetch doesn't actually call MetadataCache (no per-table
+    # description lookup); the fixture exists so future-phase wiring keeps the
+    # shared test shape. Mark optional so unused metadata mocks don't fail.
+    httpx_mock.add_response(
+        url=_metadata_url(),
+        json={"databases": {}},
+        is_reusable=True,
+        is_optional=True,
+    )
     async with httpx.AsyncClient(base_url=config.UPSTREAM_URL) as http:
         mc = MetadataCache(http, config.UPSTREAM_URL, ttl=0)
         token = MetadataCache.bind(mc)
@@ -182,12 +185,7 @@ async def test_fetch_known_judgment_returns_one_row(
         url=_db_url("zeeker-judgements"), json=_judgments_db_payload(), is_reusable=True
     )
     httpx_mock.add_response(
-        url=_zeeker_schemas_url("zeeker-judgements"),
-        json=_empty_schema_payload(),
-        is_reusable=True,
-    )
-    httpx_mock.add_response(
-        url=_table_url("zeeker-judgements", "judgments"),
+        url=_table_url_re("zeeker-judgements", "judgments"),
         json=_single_judgment_row(),
         is_reusable=True,
     )
@@ -212,12 +210,7 @@ async def test_fetch_exact_match_only_no_normalization(
         url=_db_url("zeeker-judgements"), json=_judgments_db_payload(), is_reusable=True
     )
     httpx_mock.add_response(
-        url=_zeeker_schemas_url("zeeker-judgements"),
-        json=_empty_schema_payload(),
-        is_reusable=True,
-    )
-    httpx_mock.add_response(
-        url=_table_url("zeeker-judgements", "judgments"),
+        url=_table_url_re("zeeker-judgements", "judgments"),
         json=_no_rows_payload(),
         is_reusable=True,
     )
@@ -271,18 +264,17 @@ async def test_fetch_not_found_zero_rows(
         url=_db_url("zeeker-judgements"), json=_judgments_db_payload(), is_reusable=True
     )
     httpx_mock.add_response(
-        url=_zeeker_schemas_url("zeeker-judgements"),
-        json=_empty_schema_payload(),
-        is_reusable=True,
-    )
-    httpx_mock.add_response(
-        url=_table_url("zeeker-judgements", "judgments"),
+        url=_table_url_re("zeeker-judgements", "judgments"),
         json=_no_rows_payload(),
         is_reusable=True,
     )
 
     hostile_url = "https://example.com/SECRET-PATH-CANARY-9999"
-    with caplog.at_level(logging.DEBUG):
+    # Capture at WARNING — httpx logs the GET URL at INFO/DEBUG (infrastructure
+    # noise outside the INJ-05 contract; the contract protects OUR logs and
+    # error messages, not httpx's request log). WARNING captures structlog
+    # records emitted by mcp_zeeker code paths.
+    with caplog.at_level(logging.WARNING):
         with pytest.raises(ToolError) as exc_info:
             await fetch("zeeker-judgements", "judgments", url=hostile_url)
 
@@ -291,8 +283,12 @@ async def test_fetch_not_found_zero_rows(
     # The URL substring MUST NOT appear in the error message (INJ-05)
     assert "SECRET-PATH-CANARY-9999" not in msg
     assert "example.com" not in msg
-    # And the URL MUST NOT leak into any log record either
-    log_text = " ".join(r.getMessage() for r in caplog.records)
+    # And the URL MUST NOT leak into any WARN-or-above log record (mcp_zeeker code).
+    # We exclude httpx's INFO-level request log — it's outside the INJ-05 contract
+    # because httpx is third-party infrastructure that always logs request URLs
+    # at INFO/DEBUG. The contract protects mcp_zeeker's structlog emissions.
+    mcp_zeeker_records = [r for r in caplog.records if not r.name.startswith("httpx")]
+    log_text = " ".join(r.getMessage() for r in mcp_zeeker_records)
     assert "SECRET-PATH-CANARY-9999" not in log_text
     assert "example.com" not in log_text
 
@@ -315,12 +311,7 @@ async def test_fetch_strips_heavy_and_fragment_columns(
         url=_db_url("zeeker-judgements"), json=_judgments_db_payload(), is_reusable=True
     )
     httpx_mock.add_response(
-        url=_zeeker_schemas_url("zeeker-judgements"),
-        json=_empty_schema_payload(),
-        is_reusable=True,
-    )
-    httpx_mock.add_response(
-        url=_table_url("zeeker-judgements", "judgments"),
+        url=_table_url_re("zeeker-judgements", "judgments"),
         json=_single_judgment_row(),
         is_reusable=True,
     )
@@ -340,23 +331,22 @@ async def test_fetch_strips_heavy_and_fragment_columns(
 
 
 async def test_fetch_ambiguous_url_returns_first_and_warns(
-    datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock, caplog
+    datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock, capsys
 ) -> None:
     """D3-14 step 6: upstream returns ≥2 rows → return FIRST + WARN; URL NOT logged.
 
     INJ-05: the structured WARNING record `event=fetch_ambiguous_url` MUST NOT
     contain the URL substring in any rendered form. The handler binds only
     `database`, `table`, and `match_count` to the record.
+
+    structlog is configured with the default PrintLoggerFactory + JSONRenderer
+    (see mcp_zeeker.core.logging.configure_logging), so warning lines are
+    written to stdout as JSON; we use capsys (not caplog) to capture them.
     """
     from mcp_zeeker.tools.retrieval import fetch
 
     httpx_mock.add_response(
         url=_db_url("zeeker-judgements"), json=_judgments_db_payload(), is_reusable=True
-    )
-    httpx_mock.add_response(
-        url=_zeeker_schemas_url("zeeker-judgements"),
-        json=_empty_schema_payload(),
-        is_reusable=True,
     )
     # Build a two-row response
     two_rows = _single_judgment_row()
@@ -374,33 +364,29 @@ async def test_fetch_ambiguous_url_returns_first_and_warns(
     )
     two_rows["filtered_table_rows_count"] = 2
     httpx_mock.add_response(
-        url=_table_url("zeeker-judgements", "judgments"),
+        url=_table_url_re("zeeker-judgements", "judgments"),
         json=two_rows,
         is_reusable=True,
     )
 
-    with caplog.at_level(logging.WARNING):
-        envelope = await fetch("zeeker-judgements", "judgments", url=JUDGMENT_URL)
+    envelope = await fetch("zeeker-judgements", "judgments", url=JUDGMENT_URL)
+    captured = capsys.readouterr()
 
     # First row only
     assert len(envelope.data) == 1
     assert envelope.data[0]["citation"] == "2026 SGDC 136"
 
-    # The URL itself MUST NOT appear in any log record (INJ-05)
-    log_text = " ".join(r.getMessage() for r in caplog.records)
+    # The fetch_ambiguous_url WARNING must be on stdout (JSONRenderer output)
+    # with match_count=2 and identifying fields — but NOT the URL (INJ-05 /
+    # T-03-16). Check both stdout and stderr to be safe.
+    log_text = captured.out + captured.err
+    assert "fetch_ambiguous_url" in log_text, (
+        f"expected event=fetch_ambiguous_url in stdout/stderr; got {log_text!r}"
+    )
+    assert '"match_count": 2' in log_text or "'match_count': 2" in log_text
+    # INJ-05: the URL itself MUST NOT appear in any rendered form on any stream
     assert "elitigation" not in log_text
     assert JUDGMENT_URL not in log_text
-    # A `fetch_ambiguous_url` event must have been emitted with match_count=2.
-    # structlog renders kwargs into the JSON message string under the configured
-    # JSONRenderer; assert against the message body for both substrings.
-    ambiguous_records = [r for r in caplog.records if "fetch_ambiguous_url" in r.getMessage()]
-    assert ambiguous_records, "expected a WARNING with event=fetch_ambiguous_url"
-    rendered = ambiguous_records[0].getMessage()
-    assert (
-        '"match_count": 2' in rendered
-        or "'match_count': 2" in rendered
-        or "match_count=2" in rendered
-    )
 
 
 async def test_fetch_unknown_database(
