@@ -35,7 +35,14 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Every tool description ends with the fixed safety trailer sentence; a startup CI assertion fails the build if any registered tool drifts.
   4. A request with a disallowed `Origin` header is rejected, and `httpx.AsyncClient` is a single process-lifetime instance with explicit `Limits` and `Timeout` set per research recommendations.
   5. Structured JSON logs include `request_id` (contextvar-bound), `tool`, `duration_ms`, `status`, and `ip_prefix` for every request, with the schema field set declared in `config.py`.
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+- [ ] 01-01-PLAN.md — Bootstrap: pyproject.toml + package skeleton + Wave-0 test stubs
+- [ ] 01-02-PLAN.md — config.py (D-21 source of truth) + Envelope/Provenance/Pagination Pydantic models
+- [ ] 01-03-PLAN.md — Transport stack: FastMCP server + Starlette app + middleware (request_id/origin/access_log) + structlog + httpx lifecycle
+- [ ] 01-04-PLAN.md — DatasetteClient with retry + list_databases tool + 6 Pydantic input model drafts + NotImplementedError stubs
+- [ ] 01-05-PLAN.md — Contract & smoke suite: registry-introspection, in-memory MCP smoke, uvicorn random-port smoke, Origin matrix, structlog OBS-01..05
+- [ ] 01-06-PLAN.md — Deploy: Dockerfile + docker-compose + README "Deployment" prose + manual TRANSPORT-05 checklist for Claude Desktop + Claude Code
 **UI hint**: no
 **Research flag**: standard patterns — `/gsd-research-phase` optional
 
@@ -164,7 +171,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Skeleton transport + first tool | 0/TBD | Not started | - |
+| 1. Skeleton transport + first tool | 0/6 | Not started | - |
 | 2. Discovery surface + denylists | 0/TBD | Not started | - |
 | 3. Structured retrieval + URL-keyed fetch | 0/TBD | Not started | - |
 | 4. Cross-database search | 0/TBD | Not started | - |
