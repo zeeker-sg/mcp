@@ -1,28 +1,247 @@
 """
-Retrieval tool handlers — query_table and fetch (unregistered stubs).
+Retrieval tool handlers — query_table (registered) and fetch (unregistered stub).
 
-D-01: Per-domain grouping. These handlers are unregistered async stubs raising
-NotImplementedError until Phase 3 overwrites them with real implementations.
+D-01: Per-domain grouping. Both retrieval handlers live in this module — never
+split into per-tool files (cross-`tools/` imports are a smell; see 03-PATTERNS.md).
+
+D3-08: Validation order — _resolve_table → _visible_columns → per-field
+unknown_column checks (filter / sort / columns) → compile_filters →
+DatasetteClient.get_table_rows → row reshape → Envelope.for_rows.
+NEVER add a separate HIDDEN_COLUMNS pre-check before _visible_columns; the
+counter-patch test in tests/tools/test_retrieval_side_channel.py detects
+separate code paths via raise_unknown_column invocation counts.
+
+D3-09 / INJ-05: NO ToolError message or log line interpolates a user-supplied
+filter VALUE. Every error string in this module is either a fixed literal or
+echoes only request identifiers ({database}, {table}, {column}) — never the
+value field of a Filter clause.
+
+Slice A scope (Plan 03-02): query_table emits light-column projections only.
+Heavy-column opt-in (`retrieved_content`) and qhash cursors land in Plan 03-03;
+two scope-boundary guards in the handler keep the schema stable, each carrying
+a grep marker referencing the future plan replacement so the next plan can find
+them mechanically.
 """
 
 from __future__ import annotations
 
-from mcp_zeeker.core.envelope import Envelope
+from typing import Annotated
+
+import structlog
+from fastmcp.exceptions import ToolError
+from fastmcp.tools.tool import ToolAnnotations
+from pydantic import Field
+
+from mcp_zeeker import config
+from mcp_zeeker.core.datasette_client import DatasetteClient, UpstreamCallFailed
+from mcp_zeeker.core.envelope import Envelope, Pagination
+from mcp_zeeker.core.filter_compiler import Filter, compile_filters
+from mcp_zeeker.core.visibility import (
+    _resolve_table,
+    _visible_columns,
+    raise_unknown_column,
+)
+from mcp_zeeker.server import mcp
+
+log = structlog.get_logger()
+
+# D3-16: Tool description text. MUST end with config.TOOL_TRAILER (INJ-01 /
+# ANNO-02) and mention the rate-limit literal "20/burst, 60/minute, 5000/day"
+# (ANNO-03) and case-insensitivity of LIKE-family ops (QUERY-10).
+_QUERY_TABLE_DESCRIPTION = (
+    "Retrieve rows from a Singapore legal table on data.zeeker.sg with filters, sort, "
+    "pagination, and an explicit column allow-list. Default columns are the table's "
+    "light set; heavy text columns return under 'retrieved_content' when explicitly "
+    "requested. SQLite LIKE 'contains'/'startswith'/'endswith' is case-insensitive for "
+    "ASCII. Rate limits: 20/burst, 60/minute, 5000/day per IP. " + config.TOOL_TRAILER
+)
 
 
+@mcp.tool(
+    name="query_table",
+    description=_QUERY_TABLE_DESCRIPTION,
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 async def query_table(
-    database: str,
-    table: str,
-    filters=None,
-    sort=None,
-    limit=50,
-    cursor=None,
-    columns=None,
+    database: Annotated[str, Field(description="Database name (e.g. 'zeeker-judgements')")],
+    table: Annotated[str, Field(description="Table name (e.g. 'judgments')")],
+    filters: Annotated[
+        list[Filter] | None,
+        Field(
+            default=None,
+            description=(
+                "List of filter clauses. Each clause has {column, op, value}. "
+                "Supported ops: exact, not, contains, startswith, endswith, "
+                "gt, gte, lt, lte, in, notin, isnull, notnull. "
+                "contains / startswith / endswith are case-insensitive for ASCII."
+            ),
+        ),
+    ] = None,
+    sort: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Column to sort by; prefix with '-' for descending.",
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(
+            default=50,
+            ge=1,
+            le=200,
+            description="Max rows to return; default 50, max 200.",
+        ),
+    ] = 50,
+    cursor: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Opaque pagination cursor. Reusing a cursor with a different "
+                "query shape returns invalid_cursor (Phase 3 cursor wiring "
+                "lands incrementally — Plan 03-03)."
+            ),
+        ),
+    ] = None,
+    columns: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description="Explicit column allow-list; when omitted, returns the table's light set.",
+        ),
+    ] = None,
 ) -> Envelope:
-    """Stub — query_table is registered in Phase 3 (structured retrieval)."""
-    raise NotImplementedError("query_table is registered in Phase 3 (structured retrieval)")
+    """Slice A — light-column projection of a Singapore legal table.
+
+    Heavy-column projection and qhash cursors are scope-boundary raises that
+    Plan 03-03 will replace with the real implementations.
+
+    Validation order (D3-08): cursor scope-boundary → _resolve_table →
+    _visible_columns → per-field unknown_column checks → compile_filters →
+    DatasetteClient.get_table_rows → row reshape → Envelope.for_rows.
+    """
+    # Step 1: Slice A scope-boundary — cursor support lands in Plan 03-03.
+    # Plan 03-03 will replace this scope-boundary raise with the real cursor logic.
+    if cursor is not None:
+        raise ToolError("invalid_cursor: cursor not yet supported on this slice")
+
+    # Step 2: normalize filters. When dispatched via FastMCP, Pydantic has already
+    # coerced filters to list[Filter]; when the handler is called directly as a
+    # Python function (unit tests, internal callers) the items may still be dicts.
+    # Model-validate each entry so the per-field iteration below can rely on
+    # attribute access (.column / .op / .value) regardless of call path.
+    normalized_filters: list[Filter] = [
+        f if isinstance(f, Filter) else Filter.model_validate(f) for f in (filters or [])
+    ]
+
+    # Step 3: table-existence gate (D3-08 — single emission via raise_unknown_table)
+    await _resolve_table(database, table)
+
+    # Step 4: column visibility (single source of truth, mirrors _visible_tables)
+    visible = await _visible_columns(database, table)
+
+    # Step 5: per-field unknown_column checks BEFORE compile_filters / upstream calls
+    # (D3-07 single-emission identity — counter-patched in test_retrieval_side_channel.py)
+    for f in normalized_filters:
+        if f.column not in visible:
+            raise_unknown_column(database, table, f.column)
+    if sort:
+        sort_col = sort.lstrip("-")
+        if sort_col not in visible:
+            raise_unknown_column(database, table, sort_col)
+    for col in columns or []:
+        if col not in visible:
+            raise_unknown_column(database, table, col)
+
+    # Step 6: merge column types — config fallback overlaid with upstream (D3-08, D2-07)
+    column_types_map = await DatasetteClient.current().get_table_column_types(database)
+    types_for_table = {
+        **config.COLUMN_TYPES.get(f"{database}.{table}", {}),
+        **column_types_map.get(table, {}),
+    }
+
+    # Step 7: compile filter clauses to httpx URL params (D3-01 / D3-02)
+    filter_params = compile_filters(
+        normalized_filters,
+        visible_columns=visible,
+        column_types=types_for_table,
+    )
+
+    # Step 8: determine columns to emit. Slice A — light columns only.
+    if columns is None:
+        configured_light = config.LIGHT_COLUMNS.get(f"{database}.{table}", [])
+        if configured_light:
+            light_to_emit = [c for c in configured_light if c in visible]
+        else:
+            light_to_emit = sorted(visible - config.HEAVY_COLUMNS)
+        heavy_to_emit: list[str] = []
+    else:
+        light_to_emit = [c for c in columns if c not in config.HEAVY_COLUMNS]
+        heavy_to_emit = [c for c in columns if c in config.HEAVY_COLUMNS]
+        if heavy_to_emit:
+            # Plan 03-03 will replace this scope-boundary raise with the real
+            # heavy-projection / retrieved_content logic.
+            raise ToolError(
+                "invalid_filter_op: heavy column projection not yet supported on this slice"
+            )
+
+    # Step 9: build sort param (D3-08, Datasette _sort / _sort_desc mapping)
+    if sort and sort.startswith("-"):
+        sort_params: list[tuple[str, str]] = [("_sort_desc", sort.lstrip("-"))]
+    elif sort:
+        sort_params = [("_sort", sort)]
+    else:
+        sort_params = []
+
+    # Step 10: compose Datasette params; _shape=objects is prepended by get_table_rows.
+    # upstream_cols = light_to_emit because Slice A never reaches Datasette with a
+    # heavy column (the scope-boundary raise above prevents it).
+    upstream_cols = light_to_emit
+    params: list[tuple[str, str]] = [
+        *filter_params,
+        *sort_params,
+        *[("_col", c) for c in upstream_cols],
+        ("_size", str(limit)),
+    ]
+
+    # Step 11: bind contextvars logging (OBS-03/04). NEVER bind filter values (INJ-05).
+    log.debug(
+        "query_table_invoked",
+        database=database,
+        table=table,
+        filter_count=len(normalized_filters),
+    )
+
+    # Step 12: upstream call (D-16 retry-once-with-jitter inherited from
+    # _request_with_retry). On failure, surface the generic upstream_unavailable
+    # ToolError — never echo the underlying httpx/Datasette error text (INJ-05).
+    try:
+        result = await DatasetteClient.current().get_table_rows(database, table, params)
+    except UpstreamCallFailed:
+        raise ToolError("upstream_unavailable: upstream call failed") from None
+
+    # Step 13: reshape rows. Project only the light columns we explicitly asked
+    # for. Slice A NEVER emits rowid — it's never in light_to_emit (Pitfall 5).
+    reshaped: list[dict] = []
+    for row in result.get("rows", []) or []:
+        reshaped.append({c: row[c] for c in light_to_emit if c in row})
+
+    # Step 14: emit via Envelope.for_rows. Slice A uses the default-fielded
+    # Pagination — Plan 03-03 will supply next_cursor / truncated once Pagination
+    # is extended.
+    return Envelope.for_rows(
+        database=database,
+        table=table,
+        rows=reshaped,
+        pagination=Pagination(),
+    )
 
 
 async def fetch(database: str, table: str, url: str) -> Envelope:
-    """Stub — fetch is registered in Phase 3 (URL-keyed fetch)."""
+    """Stub — fetch is registered in Phase 3 Plan 03-04 (URL-keyed fetch)."""
     raise NotImplementedError("fetch is registered in Phase 3 (URL-keyed fetch)")
