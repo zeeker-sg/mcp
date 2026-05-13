@@ -1,0 +1,47 @@
+[project]
+name = "mcp-zeeker"
+version = "0.1.0"
+description = "Read-only remote MCP server exposing data.zeeker.sg Singapore legal datasets"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp~=3.2",
+    "pydantic~=2.13",
+    "httpx~=0.28",
+    "starlette>=0.41,<2",
+    "uvicorn~=0.46",
+    "structlog~=25.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest~=8.3",
+    "pytest-asyncio~=1.3",
+    "pytest-httpx~=0.35",
+    "ruff~=0.15",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_zeeker"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.format]
+# Black-compatible defaults
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "live: hits real data.zeeker.sg (skipped unless ZEEKER_LIVE=1)",
+]
+addopts = "-ra --strict-markers"
