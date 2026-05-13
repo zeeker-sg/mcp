@@ -1,0 +1,36 @@
+{
+  "database": "zeeker-judgements",
+  "table": "judgments",
+  "is_view": false,
+  "human_description_en": "",
+  "rows": [
+    {
+      "rowid": 1,
+      "citation": "[2026] SGDC 136",
+      "case_name": "NG KAI HOE RAYMOND v Wong Peng Kong",
+      "case_numbers": "DC/OC 1154/2025 ( DC/AD 16/2026 )",
+      "decision_date": "2026-04-17",
+      "court": "SGDC",
+      "subject_tags": "[\"Damages — Assessment — Defamation\"]",
+      "source_url": "https://www.elitigation.sg/gd/s/2026_SGDC_136",
+      "pdf_url": null,
+      "summary": "In the District Court, Deputy Registrar Navin Anand decided a defamation action brought by Ng Kai Hoe Raymond against Wong Peng Kong regarding a Facebook post."
+    }
+  ],
+  "truncated": false,
+  "filtered_table_rows_count": 1,
+  "columns": [
+    "rowid",
+    "citation",
+    "case_name",
+    "case_numbers",
+    "decision_date",
+    "court",
+    "subject_tags",
+    "source_url",
+    "pdf_url",
+    "summary"
+  ],
+  "next": null,
+  "next_url": null
+}

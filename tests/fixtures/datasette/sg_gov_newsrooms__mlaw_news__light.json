@@ -1,0 +1,36 @@
+{
+  "database": "sg-gov-newsrooms",
+  "table": "mlaw_news",
+  "is_view": false,
+  "human_description_en": "sorted by published_date descending",
+  "rows": [
+    {
+      "rowid": 24,
+      "title": "SGLaw200 Youth Forum Underscores Role of Youth in Shaping the Future of the Rule of Law",
+      "published_date": "2026-05-13",
+      "category": "press-releases",
+      "source_url": "https://www.mlaw.gov.sg/sglaw200-youth-forum-underscores-role-of-youth-in-shaping-the-future-of-rule-of-law/",
+      "summary": "The Ministry of Law and IPS will host the SGLaw200 Youth Forum on 13 May 2026, commemorating the bicentennial of Singapore's modern legal system."
+    },
+    {
+      "rowid": 23,
+      "title": "Written Reply by Minister of Law Mr Edwin Tong SC on Assessing Arbitration Clauses",
+      "published_date": "2026-05-07",
+      "category": "parliamentary-speeches",
+      "source_url": "https://www.mlaw.gov.sg/written-reply-by-minister-of-law-mr-edwin-tong-sc-on-assessing-arbitration-clauses/",
+      "summary": "The Ministry of Law is exploring a framework to allow certain low-value freelancer claims to be resolved via the Small Claims Tribunals (SCT), notwithstanding existing arbitration clauses."
+    }
+  ],
+  "truncated": false,
+  "filtered_table_rows_count": 24,
+  "columns": [
+    "rowid",
+    "title",
+    "published_date",
+    "category",
+    "source_url",
+    "summary"
+  ],
+  "next": "2026-05-07,23",
+  "next_url": "http://data.zeeker.sg/sg-gov-newsrooms/mlaw_news.json?_shape=objects&_size=2&_col=title&_col=published_date&_col=category&_col=source_url&_col=summary&_next=2026-05-07%2C23&_sort_desc=published_date"
+}

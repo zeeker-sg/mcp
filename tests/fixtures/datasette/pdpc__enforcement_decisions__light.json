@@ -1,0 +1,42 @@
+{
+  "database": "pdpc",
+  "table": "enforcement_decisions",
+  "is_view": false,
+  "human_description_en": "",
+  "rows": [
+    {
+      "rowid": 1,
+      "title": "Voluntary Undertaking by Stepup (Sup) Pte Ltd",
+      "organisation": "Stepup (Sup) Pte Ltd",
+      "decision_type": "Voluntary Undertakings",
+      "decision_date": "2026-04-09",
+      "decision_url": "https://www.pdpc.gov.sg/organisations/regulations-decisions/enforcement-decisions/voluntary-undertaking-by-stepup-sup-pte-ltd",
+      "penalty_amount": null,
+      "summary": ""
+    },
+    {
+      "rowid": 2,
+      "title": "Voluntary Undertaking by Meinhardt (Singapore) Pte Ltd",
+      "organisation": "Meinhardt (Singapore) Pte Ltd",
+      "decision_type": "Voluntary Undertakings",
+      "decision_date": "2026-04-09",
+      "decision_url": "https://www.pdpc.gov.sg/organisations/regulations-decisions/enforcement-decisions/voluntary-undertaking-by-meinhardt-singapore-pte-ltd",
+      "penalty_amount": null,
+      "summary": ""
+    }
+  ],
+  "truncated": false,
+  "filtered_table_rows_count": 381,
+  "columns": [
+    "rowid",
+    "title",
+    "organisation",
+    "decision_type",
+    "decision_date",
+    "decision_url",
+    "penalty_amount",
+    "summary"
+  ],
+  "next": "2",
+  "next_url": "http://data.zeeker.sg/pdpc/enforcement_decisions.json?_shape=objects&_size=2&_col=title&_col=organisation&_col=decision_type&_col=decision_date&_col=decision_url&_col=penalty_amount&_col=summary&_next=2"
+}

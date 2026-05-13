@@ -1,0 +1,39 @@
+{
+  "database": "sglawwatch",
+  "table": "headlines",
+  "is_view": false,
+  "human_description_en": "sorted by date descending",
+  "rows": [
+    {
+      "id": "441a8608b5ca6f146d7303a3b04a2647",
+      "category": "Straits Times",
+      "title": "TOC's Terry Xu ordered to pay more than $154,000 in costs to Shanmugam, Tan See Leng",
+      "source_link": "https://www.singaporelawwatch.sg/Headlines/TOCs-Terry-Xu-ordered-to-pay-more-than-154000-in-costs-to-Shanmugam-Tan-See-Leng",
+      "author": "Straits Times: Selina Lum",
+      "date": "2026-05-13T00:01:00",
+      "summary": "In a significant cost assessment, the High Court has ordered TOC's Terry Xu to pay over $154,000 in legal costs to Ministers K. Shanmugam and Tan See Leng."
+    },
+    {
+      "id": "46f0249efaf2efa64b334177d1285849",
+      "category": "Straits Times",
+      "title": "Fees collected by govt agencies legal and proper, even though not set out in law, says MND",
+      "source_link": "https://www.singaporelawwatch.sg/Headlines/Fees-collected-by-govt-agencies-legal-and-proper-even-though-not-set-out-in-law-says-MND",
+      "author": "Straits Times: Tham Yuen-C",
+      "date": "2026-05-13T00:01:00",
+      "summary": "The passage of the Statutes (Miscellaneous Amendments) Bill has sparked intense debate over the retroactive validation of agency-prescribed fees."
+    }
+  ],
+  "truncated": false,
+  "filtered_table_rows_count": 712,
+  "columns": [
+    "id",
+    "category",
+    "title",
+    "source_link",
+    "author",
+    "date",
+    "summary"
+  ],
+  "next": "2026-05-13T00~3A01~3A00,46f0249efaf2efa64b334177d1285849",
+  "next_url": "http://data.zeeker.sg/sglawwatch/headlines.json?_shape=objects&_size=2&_col=category&_col=title&_col=source_link&_col=author&_col=date&_col=summary&_next=2026-05-13T00~3A01~3A00%2C46f0249efaf2efa64b334177d1285849&_sort_desc=date"
+}

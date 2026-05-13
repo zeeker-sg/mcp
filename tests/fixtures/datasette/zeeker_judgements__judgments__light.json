@@ -1,0 +1,39 @@
+{
+  "database": "zeeker-judgements",
+  "table": "judgments",
+  "is_view": false,
+  "human_description_en": "",
+  "rows": [
+    {
+      "rowid": 1,
+      "citation": "[2026] SGDC 136",
+      "case_name": "NG KAI HOE RAYMOND v Wong Peng Kong",
+      "decision_date": "2026-04-17",
+      "court": "SGDC",
+      "source_url": "https://www.elitigation.sg/gd/s/2026_SGDC_136",
+      "summary": "In the District Court, Deputy Registrar Navin Anand decided a defamation action brought by Ng Kai Hoe Raymond against Wong Peng Kong regarding a Facebook post. The court addressed whether the publication was substantial and whether the Claimant's reputation warranted substantial damages. Awarding only $1 in nominal damages, the court held that publication was extremely limited, evidenced by minimal engagement. Furthermore, the court found the Claimant's reputation was unworthy of significant legal protection due to prior allegations of misconduct. The court cited *Jameel* and *Qingdao Bohai* regarding limited publication and *Youprint Productions* regarding costs."
+    },
+    {
+      "rowid": 2,
+      "citation": "[2026] SGCA 19",
+      "case_name": "QURESHI MOHAMED ASLAM v MAJLIS UGAMA ISLAM, SINGAPURA",
+      "decision_date": "2026-04-17",
+      "court": "SGCA",
+      "source_url": "https://www.elitigation.sg/gd/s/2026_SGCA_19",
+      "summary": "In *Qureshi Mohamed Aslam v Majlis Ugama Islam, Singapura*, the Court of Appeal dismissed an appeal against the High Court's refusal of permission for judicial review of an Appeal Board decision under the Administration of Muslim Law Act."
+    }
+  ],
+  "truncated": false,
+  "filtered_table_rows_count": 10556,
+  "columns": [
+    "rowid",
+    "citation",
+    "case_name",
+    "decision_date",
+    "court",
+    "source_url",
+    "summary"
+  ],
+  "next": "2",
+  "next_url": "http://data.zeeker.sg/zeeker-judgements/judgments.json?_shape=objects&_size=2&_col=citation&_col=case_name&_col=decision_date&_col=court&_col=source_url&_col=summary&_next=2"
+}

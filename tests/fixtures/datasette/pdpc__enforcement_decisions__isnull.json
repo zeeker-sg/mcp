@@ -1,0 +1,32 @@
+{
+  "database": "pdpc",
+  "table": "enforcement_decisions",
+  "is_view": false,
+  "human_description_en": "",
+  "rows": [
+    {
+      "rowid": 1,
+      "title": "Voluntary Undertaking by Stepup (Sup) Pte Ltd",
+      "organisation": "Stepup (Sup) Pte Ltd",
+      "decision_type": "Voluntary Undertakings",
+      "decision_date": "2026-04-09",
+      "decision_url": "https://www.pdpc.gov.sg/organisations/regulations-decisions/enforcement-decisions/voluntary-undertaking-by-stepup-sup-pte-ltd",
+      "penalty_amount": null,
+      "summary": ""
+    }
+  ],
+  "truncated": false,
+  "filtered_table_rows_count": 274,
+  "columns": [
+    "rowid",
+    "title",
+    "organisation",
+    "decision_type",
+    "decision_date",
+    "decision_url",
+    "penalty_amount",
+    "summary"
+  ],
+  "next": "2",
+  "next_url": "http://data.zeeker.sg/pdpc/enforcement_decisions.json?_shape=objects&_size=1&penalty_amount__isnull=1&_next=2"
+}
