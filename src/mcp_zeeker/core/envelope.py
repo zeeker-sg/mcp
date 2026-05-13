@@ -34,9 +34,17 @@ class Pagination(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Filled in by later phases; Phase 1 keeps the type importable.
+    # Phase 1 fields — kept for forward-compat with Phase 6 ENV-04 wiring.
     total: int | None = None
     next_offset: int | None = None
+
+    # D3-12 (Phase 3): qhash cursor + truncation surface.
+    # `next_cursor` is produced by mcp_zeeker.core.cursor.encode_cursor() when the
+    # upstream Datasette response includes a non-null `next` token.
+    # `truncated` defaults to False; Phase 3 surfaces the value honestly from the
+    # upstream response and Phase 5 FRAG-04 will wire the real use site.
+    next_cursor: str | None = None
+    truncated: bool = False
 
 
 class Envelope(BaseModel):

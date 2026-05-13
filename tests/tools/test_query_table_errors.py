@@ -1,5 +1,5 @@
 """
-Error-path tests for query_table — Slice A (Plan 03-02).
+Error-path tests for query_table — Slice A + Slice B (Plan 03-02 + 03-03).
 
 Covers:
 - QUERY-05 / QUERY-06: unknown_column on filter / sort / columns paths — hidden
@@ -7,8 +7,10 @@ Covers:
   proven separately by `test_retrieval_side_channel.py`).
 - D3-02: invalid op on the Filter pydantic model is rejected (Literal mismatch).
 - invalid_filter_op: gt without value → fixed-literal error (no value echo).
-- Slice A scope-boundary: cursor=anything → invalid_cursor (Plan 03-03 will
-  replace this with real cursor decode).
+- D3-03 cursor errors (Plan 03-03):
+  - shape-mismatch → invalid_cursor (does not match current request shape)
+  - malformed → invalid_cursor (cursor is malformed)
+  - invalid cursor decode happens BEFORE any upstream call (no /-table.json req)
 - QUERY-07 belt-and-suspenders: limit=201 rejected before any upstream call.
 
 URL/Schema fixtures mirror `test_query_table.py`; the `_zeeker_schemas` stub
@@ -241,17 +243,71 @@ async def test_invalid_filter_op_value_required_for_gt(
 
 
 # ---------------------------------------------------------------------------
-# Slice A scope-boundary: cursor not yet supported
+# D3-03 cursor error paths (Plan 03-03 — replaces Slice A's scope-boundary test)
 # ---------------------------------------------------------------------------
 
 
-async def test_cursor_not_supported_on_slice_a(
+async def test_invalid_cursor_on_shape_mismatch(
     datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock
 ) -> None:
-    """Slice A: any non-null cursor raises invalid_cursor (Plan 03-03 replaces).
+    """D3-03: a cursor encoded for shape_a, decoded under shape_b → invalid_cursor.
 
-    Plan 03-03 will replace this test with the full cursor-walk + shape-mismatch
-    suite. For Slice A, the scope-boundary guard is the contract.
+    Concrete shape change: encode under sort=None, decode under sort='decision_date'.
+    The handler MUST raise ToolError(invalid_cursor) BEFORE issuing any upstream
+    request — the cursor decode is the first non-trivial step after the limit
+    clamp and the table-resolution gate. The error message is the FIXED literal
+    "invalid_cursor: cursor does not match current request shape" — no cursor
+    contents echoed (T-03-12 / INJ-05).
+    """
+    from mcp_zeeker.core.cursor import canonical_shape_str, encode_cursor
+
+    httpx_mock.add_response(url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True)
+    httpx_mock.add_response(
+        url=_zeeker_schemas_url("pdpc"), json=_empty_schema_payload(), is_optional=True
+    )
+
+    # Build a cursor under shape_a (sort=None), then call with shape_b (sort=decision_date)
+    shape_a = canonical_shape_str("pdpc", "enforcement_decisions", None, [], None)
+    bad_cursor = encode_cursor(shape_a, "2")
+
+    with pytest.raises(ToolError, match=r"^invalid_cursor: cursor does not match"):
+        await query_table(
+            "pdpc",
+            "enforcement_decisions",
+            cursor=bad_cursor,
+            sort="decision_date",  # shape change vs. encode
+        )
+
+
+async def test_invalid_cursor_on_malformed(
+    datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock
+) -> None:
+    """D3-03: passing a non-base64 token raises invalid_cursor (malformed) — fixed literal."""
+    httpx_mock.add_response(
+        url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True, is_optional=True
+    )
+    httpx_mock.add_response(
+        url=_zeeker_schemas_url("pdpc"), json=_empty_schema_payload(), is_optional=True
+    )
+
+    with pytest.raises(ToolError, match=r"^invalid_cursor: cursor is malformed"):
+        await query_table(
+            "pdpc",
+            "enforcement_decisions",
+            cursor="!!!not-base64-at-all!!!",
+        )
+
+
+async def test_invalid_cursor_short_circuits_before_upstream(
+    datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock
+) -> None:
+    """D3-03: a malformed cursor causes ZERO upstream /-table.json requests.
+
+    Cursor decode is the SECOND validation gate (after the limit clamp) and
+    runs before any compile_filters / upstream call. This is the contract that
+    makes shape-mismatch errors safe — an attacker cannot use cursor reuse to
+    smoke out columns or run repeated upstream queries; the rejection happens
+    locally.
     """
     httpx_mock.add_response(
         url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True, is_optional=True
@@ -264,8 +320,16 @@ async def test_cursor_not_supported_on_slice_a(
         await query_table(
             "pdpc",
             "enforcement_decisions",
-            cursor="anything",
+            cursor="garbage",
         )
+
+    # Critical assertion: NO request to /pdpc/enforcement_decisions.json was issued.
+    table_reqs = [
+        r for r in httpx_mock.get_requests() if r.url.path.endswith("/enforcement_decisions.json")
+    ]
+    assert table_reqs == [], (
+        f"invalid_cursor must short-circuit before upstream, got {len(table_reqs)} requests"
+    )
 
 
 # ---------------------------------------------------------------------------
