@@ -125,6 +125,15 @@ async def query_table(
     _visible_columns → per-field unknown_column checks → compile_filters →
     DatasetteClient.get_table_rows → row reshape → Envelope.for_rows.
     """
+    # Step 0: belt-and-suspenders limit clamp. Pydantic Field(ge=1, le=200) is
+    # the primary gate when FastMCP dispatches via MCP; direct Python callers
+    # (unit tests, internal callers) bypass that validation, so re-check here.
+    # T-03-09: rejecting limit=201 before issuing any upstream request. The
+    # message is a FIXED literal (no f-string interpolation of limit value) —
+    # mirrors the D3-09 / INJ-05 discipline used in compile_filters.
+    if limit < 1 or limit > config.MAX_QUERY_LIMIT:
+        raise ToolError("invalid_filter_op: limit must be between 1 and 200")
+
     # Step 1: Slice A scope-boundary — cursor support lands in Plan 03-03.
     # Plan 03-03 will replace this scope-boundary raise with the real cursor logic.
     if cursor is not None:

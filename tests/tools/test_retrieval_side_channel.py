@@ -1,16 +1,22 @@
 """
-Counter-patch tests for column visibility — Phase 3 Wave 0 stub (D3-07).
+Counter-patch tests for column visibility (D3-07) — Slice A (Plan 03-02).
 
 Mirrors `tests/tools/test_discovery_side_channel.py` (DISC-05 counter pattern)
 at the column level. Proves CODE-PATH IDENTITY between hidden columns and
-nonexistent columns: both must invoke `raise_unknown_column` exactly once
-each — no presence side-channel.
+nonexistent columns: both invoke `raise_unknown_column` exactly once each — no
+presence side-channel.
 
-D3-07 scope: three handler paths route through raise_unknown_column —
-filters column, sort column, columns parameter. All three are asserted here.
+Three handler paths route through `raise_unknown_column` (D3-07):
+- filter column reference
+- sort column reference
+- columns parameter entry
 
-Function-body imports of `query_table` keep collection successful until
-Plan 03-02 ships `mcp_zeeker.tools.retrieval`.
+Each path is asserted separately via the counter-patch idiom — the patch
+target is `mcp_zeeker.tools.retrieval.raise_unknown_column` (NOT the visibility
+module), because Python's `unittest.mock.patch` rewrites the binding at the
+import site. `query_table` imports `raise_unknown_column` from
+`mcp_zeeker.core.visibility`, so the lookup happens against the retrieval
+module's local binding.
 """
 
 from __future__ import annotations
@@ -20,10 +26,13 @@ from unittest.mock import patch
 import httpx
 import pytest
 import pytest_httpx
+from fastmcp.exceptions import ToolError
 
 from mcp_zeeker import config
 from mcp_zeeker.core.datasette_client import DatasetteClient
 from mcp_zeeker.core.metadata_cache import MetadataCache
+from mcp_zeeker.core.visibility import raise_unknown_column
+from mcp_zeeker.tools.retrieval import query_table
 
 
 def _db_url(name: str) -> str:
@@ -41,7 +50,7 @@ def _metadata_url() -> str:
 
 
 def _pdpc_db_payload() -> dict:
-    """pdpc.enforcement_decisions; global-hidden 'id' present in upstream columns."""
+    """pdpc.enforcement_decisions; global-hidden 'id' present in upstream column list."""
     return {
         "tables": [
             {
@@ -79,36 +88,42 @@ def _empty_schema_payload() -> dict:
 
 
 @pytest.fixture
-def datasette_client(httpx_mock: pytest_httpx.HTTPXMock):
-    http = httpx.AsyncClient(base_url=config.UPSTREAM_URL)
-    dc = DatasetteClient(http)
-    token = DatasetteClient.bind(dc)
-    yield dc
-    DatasetteClient.reset(token)
+async def datasette_client(httpx_mock: pytest_httpx.HTTPXMock):
+    async with httpx.AsyncClient(base_url=config.UPSTREAM_URL) as http:
+        dc = DatasetteClient(http)
+        token = DatasetteClient.bind(dc)
+        yield dc
+        DatasetteClient.reset(token)
 
 
 @pytest.fixture
-def metadata_cache(httpx_mock: pytest_httpx.HTTPXMock):
-    httpx_mock.add_response(url=_metadata_url(), json={"databases": {}}, is_reusable=True)
-    mc = MetadataCache(httpx.AsyncClient(base_url=config.UPSTREAM_URL), config.UPSTREAM_URL, ttl=0)
-    token = MetadataCache.bind(mc)
-    yield mc
-    MetadataCache.reset(token)
-    MetadataCache.clear_singleton()
+async def metadata_cache(httpx_mock: pytest_httpx.HTTPXMock):
+    httpx_mock.add_response(
+        url=_metadata_url(), json={"databases": {}}, is_reusable=True, is_optional=True
+    )
+    async with httpx.AsyncClient(base_url=config.UPSTREAM_URL) as http:
+        mc = MetadataCache(http, config.UPSTREAM_URL, ttl=0)
+        token = MetadataCache.bind(mc)
+        yield mc
+        MetadataCache.reset(token)
+        MetadataCache.clear_singleton()
+
+
+# ---------------------------------------------------------------------------
+# D3-07 — three handler paths share raise_unknown_column
+# ---------------------------------------------------------------------------
 
 
 async def test_filter_column_routes_through_raise_unknown_column(
     datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock
 ) -> None:
-    """D3-07: filter on hidden + nonexistent column each invoke raise_unknown_column once."""
-    from fastmcp.exceptions import ToolError
-
-    from mcp_zeeker.core.visibility import raise_unknown_column
-    from mcp_zeeker.tools.retrieval import query_table
-
+    """D3-07: filter on hidden + nonexistent column → 2 raise_unknown_column calls."""
     httpx_mock.add_response(url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True)
     httpx_mock.add_response(
-        url=_zeeker_schemas_url("pdpc"), json=_empty_schema_payload(), is_reusable=True
+        url=_zeeker_schemas_url("pdpc"),
+        json=_empty_schema_payload(),
+        is_reusable=True,
+        is_optional=True,
     )
 
     counter = {"n": 0}
@@ -118,8 +133,10 @@ async def test_filter_column_routes_through_raise_unknown_column(
         counter["n"] += 1
         original_raise(database, table, column)
 
-    # Patch at the retrieval call-site (NOT the visibility module — patch where
-    # query_table LOOKS UP raise_unknown_column).
+    # Patch at the retrieval call-site — query_table imports raise_unknown_column
+    # from core.visibility into its own module namespace, and that namespace is
+    # where the function name is looked up at call time. Patching
+    # `core.visibility.raise_unknown_column` would NOT intercept this call.
     with patch("mcp_zeeker.tools.retrieval.raise_unknown_column", counting_raise):
         with pytest.raises(ToolError):
             await query_table(
@@ -140,15 +157,13 @@ async def test_filter_column_routes_through_raise_unknown_column(
 async def test_sort_column_routes_through_raise_unknown_column(
     datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock
 ) -> None:
-    """D3-07: sort on hidden + nonexistent column each invoke raise_unknown_column once."""
-    from fastmcp.exceptions import ToolError
-
-    from mcp_zeeker.core.visibility import raise_unknown_column
-    from mcp_zeeker.tools.retrieval import query_table
-
+    """D3-07: sort on hidden + nonexistent column → 2 raise_unknown_column calls."""
     httpx_mock.add_response(url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True)
     httpx_mock.add_response(
-        url=_zeeker_schemas_url("pdpc"), json=_empty_schema_payload(), is_reusable=True
+        url=_zeeker_schemas_url("pdpc"),
+        json=_empty_schema_payload(),
+        is_reusable=True,
+        is_optional=True,
     )
 
     counter = {"n": 0}
@@ -164,21 +179,19 @@ async def test_sort_column_routes_through_raise_unknown_column(
         with pytest.raises(ToolError):
             await query_table("pdpc", "enforcement_decisions", sort="does_not_exist")  # absent
 
-    assert counter["n"] == 2
+    assert counter["n"] == 2, f"Expected 2 raise_unknown_column calls, got {counter['n']}"
 
 
 async def test_columns_param_routes_through_raise_unknown_column(
     datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock
 ) -> None:
-    """D3-07: columns= with hidden + nonexistent each invoke raise_unknown_column once."""
-    from fastmcp.exceptions import ToolError
-
-    from mcp_zeeker.core.visibility import raise_unknown_column
-    from mcp_zeeker.tools.retrieval import query_table
-
+    """D3-07: columns= with hidden + nonexistent → 2 raise_unknown_column calls."""
     httpx_mock.add_response(url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True)
     httpx_mock.add_response(
-        url=_zeeker_schemas_url("pdpc"), json=_empty_schema_payload(), is_reusable=True
+        url=_zeeker_schemas_url("pdpc"),
+        json=_empty_schema_payload(),
+        is_reusable=True,
+        is_optional=True,
     )
 
     counter = {"n": 0}
@@ -202,21 +215,27 @@ async def test_columns_param_routes_through_raise_unknown_column(
                 columns=["does_not_exist"],  # absent
             )
 
-    assert counter["n"] == 2
+    assert counter["n"] == 2, f"Expected 2 raise_unknown_column calls, got {counter['n']}"
+
+
+# ---------------------------------------------------------------------------
+# Side-channel: unknown_column error path does NOT trigger _zeeker_schemas
+# ---------------------------------------------------------------------------
 
 
 async def test_no_zeeker_schemas_call_on_unknown_column(
     datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock
 ) -> None:
-    """D3-07: unknown_column error path makes no upstream _zeeker_schemas call.
+    """D3-07 + D2-16: unknown_column rejects BEFORE the column-types upstream call.
 
-    The handler must reject the column reference BEFORE fetching column types.
+    The handler order (D3-08) puts visibility + per-field checks ahead of the
+    `get_table_column_types(database)` invocation, so the error path makes no
+    `_zeeker_schemas` request. Symmetric to Phase 2's discovery side-channel.
     """
-    from fastmcp.exceptions import ToolError
-
-    from mcp_zeeker.tools.retrieval import query_table
-
     httpx_mock.add_response(url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True)
+    # NOTE: deliberately NOT registering _zeeker_schemas — any request to it
+    # would fail with httpx_mock 'no response found', surfaced as a 500-class
+    # error in the test. The assertion below catches it positively as well.
 
     with pytest.raises(ToolError):
         await query_table(
@@ -226,4 +245,7 @@ async def test_no_zeeker_schemas_call_on_unknown_column(
         )
 
     zeeker_schema_reqs = [r for r in httpx_mock.get_requests() if "_zeeker_schemas" in str(r.url)]
-    assert len(zeeker_schema_reqs) == 0
+    assert len(zeeker_schema_reqs) == 0, (
+        f"expected no _zeeker_schemas call on unknown_column path, got: "
+        f"{[str(r.url) for r in zeeker_schema_reqs]}"
+    )
