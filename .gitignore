@@ -1,0 +1,42 @@
+# Per-phase planning artifacts (CONTEXT, PLAN, RESEARCH, VERIFICATION, etc.) — local only
+.planning/phases/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# uv
+.uv-cache/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Ruff / mypy
+.ruff_cache/
+.mypy_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Local environment overrides — copy .env.example to .env for dev
+.env
