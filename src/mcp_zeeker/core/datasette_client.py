@@ -4,12 +4,17 @@ Typed DatasetteClient wrapping httpx.AsyncClient with retry-once-with-jitter.
 Implements D-13 (typed wrapper), D-14 (httpx lifecycle via contextvar),
 D-16 (retry-once-with-jitter on 502/503, immediate 504 surface),
 D-17 (Phase 1 error mapping via UpstreamCallFailed).
+
+Phase 2 additions:
+- TableSummary extended with hidden/count/columns/primary_keys optional fields (D2-09/D2-13)
+- get_table_column_types(database) fetches /{db}/_zeeker_schemas.json for column types
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import random
 
 import httpx
@@ -24,6 +29,12 @@ class TableSummary(BaseModel):
     model_config = ConfigDict(extra="ignore")  # D-13: tolerant read of upstream JSON
 
     name: str
+    # Phase 2 optional fields (D2-09: hidden flag; D2-13: row_count passes through honestly)
+    # Defaults ensure Phase 1 fixtures still work with only {"name": ...} payloads.
+    hidden: bool = False
+    count: int | None = None
+    columns: list[str] = []
+    primary_keys: list[str] = []
 
 
 class DatabaseSummary(BaseModel):
@@ -116,3 +127,26 @@ class DatasetteClient:
         """Fetch database metadata from /{name}.json and return a typed DatabaseSummary."""
         resp = await self._request_with_retry("GET", f"/{name}.json")
         return DatabaseSummary.model_validate(resp.json())
+
+    async def get_table_column_types(self, database: str) -> dict[str, dict[str, str]]:
+        """Fetch column type map from /{database}/_zeeker_schemas.json.
+
+        Returns {table_name: {column_name: sql_type}} for all tables in the DB.
+        Falls back to empty dict if the table is absent or the upstream call fails;
+        caller is expected to merge with config.COLUMN_TYPES as a fallback.
+
+        Response shape: {"columns": [...], "rows": [[resource_name, ..., column_definitions, ...]]}
+        """
+        try:
+            resp = await self._request_with_retry("GET", f"/{database}/_zeeker_schemas.json")
+        except UpstreamCallFailed:
+            return {}
+        payload = resp.json()
+        col_idx = payload["columns"].index("resource_name")
+        defn_idx = payload["columns"].index("column_definitions")
+        result: dict[str, dict[str, str]] = {}
+        for row in payload.get("rows", []):
+            table_name = row[col_idx]
+            raw_defn = row[defn_idx]
+            result[table_name] = json.loads(raw_defn) if isinstance(raw_defn, str) else {}
+        return result
