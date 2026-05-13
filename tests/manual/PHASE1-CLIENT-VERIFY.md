@@ -9,7 +9,24 @@ sibling-container path all work end-to-end.
 - [ ] `mcp.zeeker.sg` resolves to the operator's host
 - [ ] `https://mcp.zeeker.sg/healthz` returns HTTP 200 with body `{"status":"ok"}` (verify with `curl -sf https://mcp.zeeker.sg/healthz`)
 - [ ] One log line on the deployed instance shows the requester's /24 in `ip_prefix` (proves Caddy XFF overwrite semantics — VALIDATION.md operator-side check)
-- [ ] No tool other than `list_databases` is registered (`curl -sN -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' https://mcp.zeeker.sg/mcp` returns exactly one tool name)
+- [ ] A trailing-slash redirect from `/mcp` preserves HTTPS (uvicorn `--proxy-headers` flag honored):
+
+  ```
+  curl -sI -X POST https://mcp.zeeker.sg/mcp | grep -i ^location
+  ```
+
+  Must return `location: https://mcp.zeeker.sg/mcp/` — NOT `http://`. If it returns `http://`, the Dockerfile is missing `--proxy-headers --forwarded-allow-ips=*`.
+
+- [ ] `initialize` handshake completes over real HTTP (NOT one-shot `tools/list` — MCP requires session handshake first):
+
+  ```
+  curl -sN -X POST -H 'Accept: application/json, text/event-stream' \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual-curl","version":"0.1"}}}' \
+    https://mcp.zeeker.sg/mcp/ -D -
+  ```
+
+  Must return HTTP 200 with a `mcp-session-id:` response header. The body is an SSE stream containing the `initialize` result. (For programmatic `tools/list` calls, capture that session ID and resend with the `Mcp-Session-Id` header — Claude Desktop and Claude Code handle this for you.)
 
 ## Claude Desktop
 

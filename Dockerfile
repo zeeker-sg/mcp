@@ -41,7 +41,15 @@ EXPOSE 8000
 # RATE-06: in-memory token bucket is per-process; multi-worker would silently
 # break rate-limit math (see CLAUDE.md "What NOT to Use" → gunicorn section).
 # --workers 1 is MANDATORY. Do NOT change this value.
-CMD ["uvicorn", "mcp_zeeker.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+#
+# --proxy-headers + --forwarded-allow-ips=*: Caddy terminates TLS and forwards
+# over plain HTTP on the docker network. Without these flags, uvicorn ignores
+# X-Forwarded-Proto and Starlette's auto-redirects (e.g., /mcp → /mcp/) emit
+# `Location: http://...`, which MCP clients refuse to downgrade to. The trust
+# scope is safe because the only network path that can reach uvicorn is the
+# operator's Caddy container on the same docker network (not exposed to the
+# public internet).
+CMD ["uvicorn", "mcp_zeeker.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips=*"]
 
 # Operator-visible health: docker compose shows healthy/unhealthy; Caddy startup
 # probe can also poll this endpoint.
