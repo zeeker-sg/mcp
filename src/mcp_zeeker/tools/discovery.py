@@ -21,7 +21,7 @@ from fastmcp.tools.tool import ToolAnnotations
 from pydantic import Field
 
 from mcp_zeeker import config
-from mcp_zeeker.core.config_lookup import hidden_columns_for
+from mcp_zeeker.core.config_lookup import hidden_columns_for, url_column_for
 from mcp_zeeker.core.datasette_client import DatasetteClient
 from mcp_zeeker.core.envelope import Envelope
 from mcp_zeeker.core.metadata_cache import MetadataCache
@@ -225,7 +225,11 @@ async def describe_table(
             )
         )
 
-    url_keyed = f"{database}.{table}" in config.URL_COLUMNS
+    # CR-01 / D2-10 / D3-04 single-source-of-truth: read URL_COLUMNS via the
+    # url_column_for helper so describe_table and fetch share one call-site
+    # (mirror of hidden_columns_for discipline). Any future change to the
+    # URL_COLUMNS shape stays a one-line edit in core/config_lookup.py.
+    url_keyed = url_column_for(database, table) is not None
 
     supports_frags = _supports_fragments(database, table)
 
