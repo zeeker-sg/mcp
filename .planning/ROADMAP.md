@@ -38,8 +38,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 6 plans
 Plans:
 - [x] 01-01-PLAN.md — Bootstrap: pyproject.toml + package skeleton + Wave-0 test stubs
-- [ ] 01-02-PLAN.md — config.py (D-21 source of truth) + Envelope/Provenance/Pagination Pydantic models
-- [ ] 01-03-PLAN.md — Transport stack: FastMCP server + Starlette app + middleware (request_id/origin/access_log) + structlog + httpx lifecycle
+- [x] 01-02-PLAN.md — config.py (D-21 source of truth) + Envelope/Provenance/Pagination Pydantic models
+- [x] 01-03-PLAN.md — Transport stack: FastMCP server + Starlette app + middleware (request_id/origin/access_log) + structlog + httpx lifecycle
 - [ ] 01-04-PLAN.md — DatasetteClient with retry + list_databases tool + 6 Pydantic input model drafts + NotImplementedError stubs
 - [ ] 01-05-PLAN.md — Contract & smoke suite: registry-introspection, in-memory MCP smoke, uvicorn random-port smoke, Origin matrix, structlog OBS-01..05
 - [ ] 01-06-PLAN.md — Deploy: Dockerfile + docker-compose + README "Deployment" prose + manual TRANSPORT-05 checklist for Claude Desktop + Claude Code
