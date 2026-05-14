@@ -12,20 +12,19 @@ Every successful response is **citation-ready, scope-bounded, and safe to feed b
 
 ### Validated
 
-(None yet — ship to validate)
+- ✓ `query_table` defaults to per-table "light" column sets — heavy text columns opt-in via `columns` parameter, returned under `retrieved_content` — Phase 3 (D3-19 snapshot contract; live-verified byte-exact across Claude Desktop + Claude Code)
+- ✓ URL-keyed `fetch` for tables with natural URL keys (per-table mapping) — Phase 3 (FETCH-03 strips heavy + FK columns; FETCH-04 deliberately distinguishes `unsupported_table_for_fetch` from `unknown_table`)
+- ✓ Injection-resistance via consistent envelope labeling and a fixed trailing sentence on every tool description — Phase 3 (INJ-01 TOOL_TRAILER live-visible in Claude Desktop; INJ-05 verified on three attack shapes — hostile URL on unsupported table, hostile URL on not_found, cursor shape-mismatch — zero user-input echo in error bodies)
 
 ### Active
 
-- [ ] Six MCP tools (`list_databases`, `list_tables`, `describe_table`, `search`, `query_table`, `fetch`) over streamable HTTP (SSE fallback)
+- [ ] Six MCP tools (`list_databases`, `list_tables`, `describe_table`, `search`, `query_table`, `fetch`) over streamable HTTP (SSE fallback) — 5/6 shipped through Phase 3; `search` remains in Phase 4
 - [ ] Provenance envelope wrapping every successful response (source, database, table, retrieved_at, license, attribution; citation synthesized when missing)
-- [ ] Hidden-table and hidden-column enforcement (denylist in `config.py`; rejects requests; strips from responses)
-- [ ] `query_table` defaults to per-table "light" column sets — heavy text columns opt-in via `columns` parameter, returned under `retrieved_content`
-- [ ] URL-keyed `fetch` for tables with natural URL keys (per-table mapping)
+- [ ] Hidden-table and hidden-column enforcement (denylist in `config.py`; rejects requests; strips from responses) — single code path for hidden + nonexistent columns locked in Phase 3 (T-03-02); full validation deferred to Phase 8 test sweep
 - [ ] Transparent fragment-parent join for `*_fragments` tables (URL → parent PK → fragment FK, ordered)
 - [ ] Full-text `search` across the four databases via Datasette `/-/search.json`, returning preview rows only, hidden-table results stripped
-- [ ] Injection-resistance via consistent envelope labeling and a fixed trailing sentence on every tool description
 - [ ] In-memory token-bucket rate limiter (20-burst / 60-min / 5k-per-24h) keyed by client IP (X-Forwarded-For aware)
-- [ ] Structured MCP error catalog with stable codes (`unknown_database`, `unknown_column`, `rate_limited`, `upstream_unavailable`, etc.); 5xx retried once with backoff
+- [ ] Structured MCP error catalog with stable codes — Phase 3 locked the 6-code retrieval subset (`unknown_table`, `unknown_column`, `invalid_filter_op`, `invalid_cursor`, `unsupported_table_for_fetch`, `not_found`); `rate_limited` + `upstream_unavailable` + retry semantics finalized in Phase 7
 - [ ] `/healthz` endpoint and structured JSON request logs (tool, db, table, duration, status, IP-prefix)
 - [ ] Test coverage for filter mapping, envelope shape, hidden-data enforcement, fragment joins, rate-limit windows, error mapping; gated live integration tests against `data.zeeker.sg`
 - [ ] Submission PR to `anthropics/claude-for-legal` adding the server to at least one plugin's default `.mcp.json` with README
@@ -66,14 +65,18 @@ Every successful response is **citation-ready, scope-bounded, and safe to feed b
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Six opinionated tools, no `execute_sql` | Opinionated surface is easier for an LLM to use correctly and easier to review | — Pending |
-| Heavy text columns opt-in via `columns` only | Bounds default token cost; prevents accidental megabyte payloads | — Pending |
-| Heavy content returned under `retrieved_content` key, never inlined | Visually unambiguous to a reading LLM that this is data, not instructions | — Pending |
-| Single `config.py` for all denylists / mappings | One place to audit; one place to update when upstream schema evolves | — Pending |
-| In-memory token bucket keyed by IP for v1 | Single-process anonymous tier — Redis/auth deferred behind a stable interface | — Pending |
-| Streamable HTTP with SSE fallback | Aligns with current MCP transport spec | — Pending |
-| Labeling over lexical content filtering | Legal text legitimately contains adversarial-looking content; filtering would degrade utility | — Pending |
-| Fragment-parent join hidden behind a URL filter | Caller never sees internal PKs/FKs; ergonomic and consistent with URL-as-key model | — Pending |
+| Six opinionated tools, no `execute_sql` | Opinionated surface is easier for an LLM to use correctly and easier to review | ✓ 5/6 shipped; `search` in Phase 4 |
+| Heavy text columns opt-in via `columns` only | Bounds default token cost; prevents accidental megabyte payloads | ✓ Phase 3 — `query_table` enforces |
+| Heavy content returned under `retrieved_content` key, never inlined | Visually unambiguous to a reading LLM that this is data, not instructions | ✓ Phase 3 — D3-19 snapshot; live byte-exact parity Desktop ↔ Code |
+| Single `config.py` for all denylists / mappings | One place to audit; one place to update when upstream schema evolves | ✓ Phase 3 — D3-04 single-source-of-truth (CR-01 fix added regression test for `URL_COLUMNS` + `HIDDEN_COLUMNS`) |
+| In-memory token bucket keyed by IP for v1 | Single-process anonymous tier — Redis/auth deferred behind a stable interface | — Pending (Phase 7) |
+| Streamable HTTP with SSE fallback | Aligns with current MCP transport spec | ✓ Phase 1 |
+| Labeling over lexical content filtering | Legal text legitimately contains adversarial-looking content; filtering would degrade utility | ✓ Phase 3 — INJ-01 TOOL_TRAILER live-visible in Claude Desktop |
+| Fragment-parent join hidden behind a URL filter | Caller never sees internal PKs/FKs; ergonomic and consistent with URL-as-key model | — Pending (Phase 5) |
+| **INJ-05**: User-supplied URL / filter value MUST NOT appear in any error body | Fixed-literal errors make value-echo regressions detectable by grep; tested live against three attack shapes | ✓ Phase 3 — wire-level confirmed via curl F-4 examples D + E (`example.com` / `NONEXISTENT_999` substrings absent) and Claude Desktop S5 + S6 transcripts |
+| **D3-12 LOCKED error catalog** (6 codes for query_table + fetch) | Stable codes for log/metrics consumers; new codes require explicit catalog update | ✓ Phase 3 — `unknown_table`, `unknown_column`, `invalid_filter_op`, `invalid_cursor`, `unsupported_table_for_fetch`, `not_found` |
+| **FETCH-04**: `unsupported_table_for_fetch` distinct from `unknown_table` | Presence side-channel deliberately exposes "this table exists but is not URL-keyed" — bounded by `_resolve_table` running first so hidden tables emit `unknown_table` | ✓ Phase 3 — accepted risk T-03-19 |
+| **qhash cursor digest** (blake2b 8-byte) binds cursor to query shape | Catches sort/filter/columns drift across page boundaries; cursor is not a security primitive but the digest gives an honest contract | ✓ Phase 3 — live-verified S6 (shape-mismatch returns fixed-literal `invalid_cursor:` with no token echo) |
 
 ## Evolution
 
@@ -93,4 +96,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-13 after initialization*
+*Last updated: 2026-05-14 after Phase 3 (structured-retrieval-url-keyed-fetch)*

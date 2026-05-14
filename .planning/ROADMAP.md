@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Skeleton transport + first tool** - Streamable HTTP `/mcp` endpoint live; `list_databases` returns the four Zeeker databases inside a stub provenance envelope
 - [ ] **Phase 2: Discovery surface + denylists** - `list_tables` and `describe_table` enforce hidden-table/column denylists with no presence side-channel
-- [ ] **Phase 3: Structured retrieval + URL-keyed fetch** - `query_table` (11 filter operators, qhash cursor, light/heavy columns) and `fetch` (per-table URL mapping) work against real upstream
+- [x] **Phase 3: Structured retrieval + URL-keyed fetch** - `query_table` (11 filter operators, qhash cursor, light/heavy columns) and `fetch` (per-table URL mapping) work against real upstream (completed 2026-05-14)
 - [ ] **Phase 4: Cross-database search** - `search` runs FTS across the four databases with hidden-table stripping and preview-only rows
 - [ ] **Phase 5: Transparent fragment-parent joins** - `query_table` on `*_fragments` tables resolves URL→parent PK→fragment FK transparently and paginates past Datasette's 1k-row cap
 - [ ] **Phase 6: Envelope hardening + injection-resistance labelling** - Single EnvelopeBuilder is the only emission path; every tool description ends with the fixed safety trailer
@@ -189,7 +189,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 |-------|----------------|--------|-----------|
 | 1. Skeleton transport + first tool | 0/6 | Not started | - |
 | 2. Discovery surface + denylists | 0/3 | Not started | - |
-| 3. Structured retrieval + URL-keyed fetch | 0/4 | Not started | - |
+| 3. Structured retrieval + URL-keyed fetch | 4/4 | Complete    | 2026-05-14 |
 | 4. Cross-database search | 0/TBD | Not started | - |
 | 5. Transparent fragment-parent joins | 0/TBD | Not started | - |
 | 6. Envelope hardening + injection-resistance labelling | 0/TBD | Not started | - |

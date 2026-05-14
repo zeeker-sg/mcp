@@ -2,49 +2,49 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 3 context gathered (local-only, gitignored). Awaiting /gsd-plan-phase 3 (research-flagged).
-last_updated: "2026-05-13T16:17:25.625Z"
-last_activity: 2026-05-13 -- Phase 03 execution started
+status: ready_to_plan
+stopped_at: Phase 3 complete (4/4 plans + 7 review-fix commits + 19/19 threats closed + UAT passed). Ready to plan Phase 4 (cross-database-search).
+last_updated: "2026-05-14T08:15:00Z"
+last_activity: 2026-05-14 -- Phase 03 transition complete
 progress:
   total_phases: 9
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 13
-  completed_plans: 9
-  percent: 69
+  completed_plans: 13
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-13)
+See: .planning/PROJECT.md (updated 2026-05-14)
 
 **Core value:** Every successful response is citation-ready, scope-bounded, and safe to feed back into an LLM — provenance attached, hidden internal data stripped, retrieved third-party text labeled as data rather than instructions.
-**Current focus:** Phase 03 — structured-retrieval-url-keyed-fetch
+**Current focus:** Phase 04 — cross-database-search
 
 ## Current Position
 
-Phase: 03 (structured-retrieval-url-keyed-fetch) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 03
-Last activity: 2026-05-13 -- Phase 03 execution started
+Phase: 4
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-05-14
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [████████████████████] 13/13 plans (100%)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 13 (across phases 1–3)
 - Average duration: —
-- Total execution time: 0.0 hours
+- Total execution time: — hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 3 | 4 | - | - |
 
 **Recent Trend:**
 
@@ -60,6 +60,11 @@ Progress: [░░░░░░░░░░] 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 3: INJ-05 acceptance gate live-verified — user-supplied URL / filter values never echo into error bodies. Confirmed on three attack shapes (hostile URL on unsupported table, hostile URL on not_found, cursor shape-mismatch).
+- Phase 3: D3-12 LOCKED 6-code error catalog for retrieval (`unknown_table`, `unknown_column`, `invalid_filter_op`, `invalid_cursor`, `unsupported_table_for_fetch`, `not_found`). Extending it requires explicit catalog update — code-review WR-02 kept the limit-clamp on the locked code with a forward pointer to Phase 7.
+- Phase 3: D3-04 single-source-of-truth invariant — `config.URL_COLUMNS` and `config.HIDDEN_COLUMNS` read only via their helper functions. Regression test (`tests/test_config_lookup_single_source.py`) AST-scans all `src/mcp_zeeker/` for direct reads.
+- Phase 3: D3-19 default-light snapshot contract — `set(row.keys()) ∩ HEAVY_COLUMNS == ∅` for every emitted row when `columns` is omitted; heavy text only under `retrieved_content` nested object.
+- Phase 3: FETCH-04 — `unsupported_table_for_fetch` deliberately distinct from `unknown_table` (presence side-channel accepted by design; bounded by `_resolve_table` running before `URL_COLUMNS` lookup so hidden tables emit `unknown_table`).
 - Project init: Six opinionated read-only tools (no `execute_sql`), single `config.py` for all denylists, in-memory IP-keyed token bucket, streamable HTTP with SSE fallback, labelling-not-filtering for injection resistance.
 - Project init: Stack locked to FastMCP 3.2 + httpx 0.28 + Pydantic 2.13 + Starlette 1.0 + Uvicorn 0.46 + structlog 25.5; `ruff format` replaces Black; single Uvicorn worker non-negotiable for v1.
 
@@ -69,8 +74,9 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 3, 5, 7, 9 are flagged for `/gsd-research-phase` before plan-phase (filter compiler + Datasette fixtures, fragment-join orchestration, token-bucket + XFF semantics, `.mcp.json` character-for-character mimicry respectively).
+- Phase 5, 7, 9 are flagged for `/gsd-research-phase` before plan-phase (fragment-join orchestration, token-bucket + XFF semantics, `.mcp.json` character-for-character mimicry respectively). Phase 3 research flag is resolved.
 - Operator-managed concerns documented in PRD/research and surfaced in Phase 7/8: Anthropic IP allowlist, reverse proxy must overwrite (not append) XFF, single Uvicorn worker, TLS terminated upstream.
+- Phase 3 deferred work: pagination.truncated upstream wiring (consumer side) — addressed in Phase 5 (FRAG-04). Two-`get_database` round-trip optimization — addressed in Phase 6 metadata-cache (IN-01). 3 accepted security risks (T-03-05 large-filter DoS, T-03-14 cursor-walk DoS, T-03-19 unsupported_table presence side-channel) are deferred to Phase 7 rate limiter or design-intent.
 
 ## Deferred Items
 
@@ -82,6 +88,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13T14:54:23.913Z
-Stopped at: Phase 3 context gathered (local-only, gitignored). Awaiting /gsd-plan-phase 3 (research-flagged).
-Resume file: .planning/phases/03-structured-retrieval-url-keyed-fetch/03-CONTEXT.md
+Last session: 2026-05-14T08:15:00Z
+Stopped at: Phase 3 complete — UAT passed, code review fixed, security secured, transition committed. Ready to plan Phase 4 (cross-database-search).
+Resume file: None

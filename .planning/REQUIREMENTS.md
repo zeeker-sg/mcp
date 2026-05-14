@@ -24,24 +24,24 @@
 
 ### Retrieval (QUERY)
 
-- [ ] **QUERY-01**: `query_table(database, table, filters?, sort?, limit?, cursor?, columns?)` returns rows filtered, sorted, and paginated
-- [ ] **QUERY-02**: Default response uses per-table *light* column set; heavy text columns (`content_text`, `full_text`, `html_raw`, `footnote_text`, `figure_descriptions`, fragment `text`) only returned when explicitly listed in `columns`
-- [ ] **QUERY-03**: When heavy columns requested, they are returned under the `retrieved_content` key on each row, never inlined as bare row-level strings
-- [ ] **QUERY-04**: 11 filter operators supported: `exact`, `not`, `contains`, `startswith`, `endswith`, `gt`, `gte`, `lt`, `lte`, `in`, `notin`, `isnull`, `notnull`
-- [ ] **QUERY-05**: Filters / sort referencing hidden columns are rejected with `unknown_column` (no presence side-channel)
-- [ ] **QUERY-06**: `columns` parameter validated against table's real schema; unknown or hidden references return `unknown_column`
-- [ ] **QUERY-07**: Default `limit` 50, maximum 200, enforced
-- [ ] **QUERY-08**: Pagination cursor is `qhash`-bound — encodes both Datasette's opaque `_next` and a hash of the normalized request shape; mismatched cursor returns `invalid_cursor`
-- [ ] **QUERY-09**: User-supplied filter values are NEVER echoed back in error messages, logs, or any LLM-readable string — referenced positionally, logged as type+length
-- [ ] **QUERY-10**: `contains` filter operator case-sensitivity behavior documented in tool description (SQLite `LIKE` semantics)
+- [x] **QUERY-01**: `query_table(database, table, filters?, sort?, limit?, cursor?, columns?)` returns rows filtered, sorted, and paginated
+- [x] **QUERY-02**: Default response uses per-table *light* column set; heavy text columns (`content_text`, `full_text`, `html_raw`, `footnote_text`, `figure_descriptions`, fragment `text`) only returned when explicitly listed in `columns`
+- [x] **QUERY-03**: When heavy columns requested, they are returned under the `retrieved_content` key on each row, never inlined as bare row-level strings
+- [x] **QUERY-04**: 11 filter operators supported: `exact`, `not`, `contains`, `startswith`, `endswith`, `gt`, `gte`, `lt`, `lte`, `in`, `notin`, `isnull`, `notnull`
+- [x] **QUERY-05**: Filters / sort referencing hidden columns are rejected with `unknown_column` (no presence side-channel)
+- [x] **QUERY-06**: `columns` parameter validated against table's real schema; unknown or hidden references return `unknown_column`
+- [x] **QUERY-07**: Default `limit` 50, maximum 200, enforced
+- [x] **QUERY-08**: Pagination cursor is `qhash`-bound — encodes both Datasette's opaque `_next` and a hash of the normalized request shape; mismatched cursor returns `invalid_cursor`
+- [x] **QUERY-09**: User-supplied filter values are NEVER echoed back in error messages, logs, or any LLM-readable string — referenced positionally, logged as type+length
+- [x] **QUERY-10**: `contains` filter operator case-sensitivity behavior documented in tool description (SQLite `LIKE` semantics)
 
 ### Fetch (FETCH)
 
-- [ ] **FETCH-01**: `fetch(database, table, url)` returns the row at the given URL for tables in the per-table URL-column mapping (`judgments.source_url`, `enforcement_decisions.decision_url`, `*_news.source_url`, `sglawwatch.headlines.source_link`, `sglawwatch.commentaries.link`, `sglawwatch.about_singapore_law.item_url`)
-- [ ] **FETCH-02**: `fetch` URL match is exact string equality — no silent normalization (`?utm=...` is not the same URL)
-- [ ] **FETCH-03**: `fetch` returns all *non-heavy, non-fragment* columns for the row; heavy text and fragments require a follow-up `query_table`
-- [ ] **FETCH-04**: `fetch` on a table without URL-column mapping returns `unsupported_table_for_fetch`
-- [ ] **FETCH-05**: `fetch` with a URL that resolves to zero rows returns `not_found`
+- [x] **FETCH-01**: `fetch(database, table, url)` returns the row at the given URL for tables in the per-table URL-column mapping (`judgments.source_url`, `enforcement_decisions.decision_url`, `*_news.source_url`, `sglawwatch.headlines.source_link`, `sglawwatch.commentaries.link`, `sglawwatch.about_singapore_law.item_url`)
+- [x] **FETCH-02**: `fetch` URL match is exact string equality — no silent normalization (`?utm=...` is not the same URL)
+- [x] **FETCH-03**: `fetch` returns all *non-heavy, non-fragment* columns for the row; heavy text and fragments require a follow-up `query_table`
+- [x] **FETCH-04**: `fetch` on a table without URL-column mapping returns `unsupported_table_for_fetch`
+- [x] **FETCH-05**: `fetch` with a URL that resolves to zero rows returns `not_found`
 
 ### Search (SEARCH)
 
@@ -196,21 +196,21 @@ Populated by gsd-roadmapper on 2026-05-13.
 | DISC-03 | Phase 2 | Pending |
 | DISC-04 | Phase 2 | Pending |
 | DISC-05 | Phase 2 | Pending |
-| QUERY-01 | Phase 3 | Pending |
-| QUERY-02 | Phase 3 | Pending |
-| QUERY-03 | Phase 3 | Pending |
-| QUERY-04 | Phase 3 | Pending |
-| QUERY-05 | Phase 3 | Pending |
-| QUERY-06 | Phase 3 | Pending |
-| QUERY-07 | Phase 3 | Pending |
-| QUERY-08 | Phase 3 | Pending |
-| QUERY-09 | Phase 3 | Pending |
-| QUERY-10 | Phase 3 | Pending |
-| FETCH-01 | Phase 3 | Pending |
-| FETCH-02 | Phase 3 | Pending |
-| FETCH-03 | Phase 3 | Pending |
-| FETCH-04 | Phase 3 | Pending |
-| FETCH-05 | Phase 3 | Pending |
+| QUERY-01 | Phase 3 | Complete |
+| QUERY-02 | Phase 3 | Complete |
+| QUERY-03 | Phase 3 | Complete |
+| QUERY-04 | Phase 3 | Complete |
+| QUERY-05 | Phase 3 | Complete |
+| QUERY-06 | Phase 3 | Complete |
+| QUERY-07 | Phase 3 | Complete |
+| QUERY-08 | Phase 3 | Complete |
+| QUERY-09 | Phase 3 | Complete |
+| QUERY-10 | Phase 3 | Complete |
+| FETCH-01 | Phase 3 | Complete |
+| FETCH-02 | Phase 3 | Complete |
+| FETCH-03 | Phase 3 | Complete |
+| FETCH-04 | Phase 3 | Complete |
+| FETCH-05 | Phase 3 | Complete |
 | SEARCH-01 | Phase 4 | Pending |
 | SEARCH-02 | Phase 4 | Pending |
 | SEARCH-03 | Phase 4 | Pending |
