@@ -18,6 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: Cross-database search** - `search` runs FTS across the four databases with hidden-table stripping and preview-only rows (completed 2026-05-14)
 - [x] **Phase 5: Transparent fragment-parent joins** - `query_table` on `*_fragments` tables resolves URL→parent PK→fragment FK transparently and paginates past Datasette's 1k-row cap (completed 2026-05-14, F-4 sign-off pending human walk)
 - [ ] **Phase 6: Envelope hardening + injection-resistance labelling** - Single EnvelopeBuilder is the only emission path; every tool description ends with the fixed safety trailer
+- [ ] **Phase 6.1: Envelope hardening gap closure (INSERTED)** - Fix 4 manual-UAT findings on top of Phase 6: cold-cache license fallback, transparent citation-column augmentation, mlaw_news heavy-column upstream call, and live drift probe drift
 - [ ] **Phase 7: Rate limit + structured errors + healthz + logs** - 20-burst/60-min/5k-24h token bucket; locked error catalog; liveness-only `/healthz`; structured JSON access logs
 - [ ] **Phase 8: Full tests + 24h soak** - Filter/envelope/hidden/fragment/rate-limit/error unit coverage; gated live tests against `data.zeeker.sg`; 24h soak validates p95, memory, log growth
 - [ ] **Phase 9: Submission PR to anthropics/claude-for-legal** - Public docs, privacy policy, README with 3 use cases + injection-resistance writeup, `.mcp.json` entry mimicking an existing merged entry character-for-character
@@ -149,6 +150,22 @@ Plans:
 **UI hint**: no
 **Research flag**: standard patterns — `/gsd-research-phase` optional
 
+### Phase 6.1: Envelope hardening gaps (INSERTED)
+**Goal**: Close the 4 user-visible-quality findings the manual UAT against `mcp.zeeker.sg` surfaced on top of Phase 6. After 6.1 lands, every `list_databases` row carries a non-empty `license`/`license_url`, every `_citation` is meaningful regardless of the caller's `columns=` choice, `query_table` against `sg-gov-newsrooms.mlaw_news` heavy columns succeeds, and the live drift probe matches the actual upstream `/-/metadata.json`.
+**Mode:** mvp
+**Depends on**: Phase 6
+**Requirements**: ENV-02, ENV-03, ENV-04 (gap-closure on the same envelope/citation/license requirements Phase 6 owned)
+**Success Criteria** (what must be TRUE):
+  1. `MetadataCache.license_for_sync()` on a cold cache (`_data is None`) returns `config.LICENSES.get(database, ("", ""))` instead of `("", "")` — per D6-04's "config-fallback on cold cache" wording. A regression test asserts cold-cache lookup returns the config tuple, not empty. Live `list_databases` against `mcp.zeeker.sg` shows non-empty `license`/`license_url` on all 4 databases.
+  2. Per-row `_citation` on `query_table`/`fetch`/`search` is meaningful even when the caller's `columns=` excludes the citation-template placeholder columns. The server detects the placeholder columns `CITATION_TEMPLATES[(db, table)]` references, silently adds them to the SELECT, then strips them from the response row before emission. A test calls `query_table(..., columns=["content_text"])` and asserts `_citation` contains the citation-template substituted values (not the `"  (, ) — "` empty-placeholder form).
+  3. `query_table(database="sg-gov-newsrooms", table="mlaw_news", columns=["content_text"], limit=1)` returns a row with `retrieved_content.content_text` populated and a `_policy` block — NOT `upstream_unavailable`. Root cause identified and fixed in `tools/retrieval.py` (likely a URL/query-construction divergence between the light projection path and the heavy projection path).
+  4. `tests/test_metadata_cache.py::test_live_metadata_parseable` either updates the asserted license value to match the actual upstream (currently `"All rights reserved"` for `sg-gov-newsrooms`) OR is rewritten to assert the dual-layer model — that whatever upstream returns, the connector's `_policy` block still emits the operator-chosen content license (SODL/allowed for the gov newsrooms). Live drift probe (`ZEEKER_LIVE=1 uv run pytest -m live tests/test_metadata_cache.py -v`) is green.
+**Plans**: 1 plan
+Plans:
+- [ ] 06.1-01-PLAN.md — Gap closure: 4 findings (cold-cache license fallback, transparent citation-column augmentation, mlaw_news heavy-column upstream call, live drift probe rewrite) — 4 atomic commits
+**UI hint**: no
+**Research flag**: none — gap closure on concrete findings; no research needed
+
 ### Phase 7: Rate limit + structured errors + healthz + logs
 **Goal**: The server enforces anonymous-tier rate limits with correct `Retry-After` semantics, returns every error from the locked catalog with stable codes plus request ID, exposes liveness on `/healthz` without leaking upstream status, and emits structured JSON access logs that never echo user input.
 **Mode:** mvp
@@ -207,6 +224,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. Cross-database search | 0/4 | Not started | - |
 | 5. Transparent fragment-parent joins | 0/TBD | Not started | - |
 | 6. Envelope hardening + injection-resistance labelling | 0/3 | Not started | - |
+| 6.1. Envelope hardening gap closure | 0/1 | Not started | - |
 | 7. Rate limit + structured errors + healthz + logs | 0/TBD | Not started | - |
 | 8. Full tests + 24h soak | 0/TBD | Not started | - |
 | 9. Submission PR to anthropics/claude-for-legal | 0/TBD | Not started | - |

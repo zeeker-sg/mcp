@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: paused
-stopped_at: Phase 6 Plan 06-03 Task 4 — awaiting operator UAT sign-off in tests/manual/PHASE6-CLIENT-VERIFY.md
-last_updated: "2026-05-14T14:42:00.000Z"
-last_activity: 2026-05-14 -- Phase 06 plans 1-3 implementation green (328/3 tests); operator UAT pending
+status: executing
+stopped_at: Phase 6 context gathered
+last_updated: "2026-05-14T22:04:04.760Z"
+last_activity: 2026-05-14 -- Phase 06.1 execution started
 progress:
-  total_phases: 9
-  completed_phases: 5
-  total_plans: 24
-  completed_plans: 21
-  percent: 88
+  total_phases: 10
+  completed_phases: 6
+  total_plans: 25
+  completed_plans: 24
+  percent: 96
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-14)
 
 **Core value:** Every successful response is citation-ready, scope-bounded, and safe to feed back into an LLM — provenance attached, hidden internal data stripped, retrieved third-party text labeled as data rather than instructions.
-**Current focus:** Phase 06 — envelope-hardening-injection-resistance-labelling
+**Current focus:** Phase 06.1 — envelope-hardening-gaps
 
 ## Current Position
 
-Phase: 06 (envelope-hardening-injection-resistance-labelling) — PAUSED at Plan 06-03 Task 4
-Plan: 3 of 3 (Plan 06-03 Task 4 awaits operator UAT sign-off)
-Status: Paused — operator must walk tests/manual/PHASE6-CLIENT-VERIFY.md and fill the F-4 Sign-off block, then reply "approved"
-Last activity: 2026-05-14 -- Plans 06-01, 06-02 merged; Plan 06-03 tests 1-3 GREEN (328/3); manual UAT shipped UNSIGNED
+Phase: 06.1 (envelope-hardening-gaps) — EXECUTING
+Plan: 1 of 1
+Status: Executing Phase 06.1
+Last activity: 2026-05-14 -- Phase 06.1 execution started
 
 **Resume:** After operator UAT sign-off, continue with `/gsd-code-review 06`, `/gsd-verify-work 06`, then `/gsd-execute-phase 06` (re-runs verification only since all SUMMARYs exist).
 
