@@ -5,15 +5,50 @@ These three models are the ONLY path through which tool handlers emit responses
 (ENV-06, ENV-07). Every @mcp.tool handler must return an Envelope produced by
 one of the classmethod factories below. Plan 05's registry-introspection
 contract test enforces this at CI time.
+
+Phase 6 / Plan 06-02 rewires the four factory bodies:
+- `retrieved_at` reads from `get_tool_started_at()` (the ContextVar bound by
+  `RetrievedAtMiddleware` at the start of every tool call — D6-09 / D6-10 /
+  D6-11 safety-net).
+- `for_table_list` and `for_rows` read license via
+  `MetadataCache.current().license_for_sync(database)` — D6-01 / D6-04 fallback
+  chain: upstream `/-/metadata.json` non-empty value wins, otherwise
+  `config.LICENSES`, otherwise empty tuple.
+- `for_database_list` and `for_search_results` keep envelope-level
+  `license=LICENSE_MIXED, license_url=None` per D6-03 (multi-DB envelopes
+  carry envelope-level "mixed"; per-row license/license_url is populated by
+  the tool handlers — `tools/discovery.py:list_databases` and
+  `core/search.py:_one_table`).
+- The `citation` parameter on `for_rows` is dropped per D6-05 (per-row
+  citation lives in `data[i]["citation"]` attached by the handler row
+  reshape — synthesize_citation; envelope-level citation is moot).
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
 from mcp_zeeker import config
+from mcp_zeeker.core.metadata_cache import MetadataCache
+from mcp_zeeker.core.middleware.retrieved_at import get_tool_started_at
+
+
+def _license_pair(database: str) -> tuple[str, str]:
+    """D6-04 cold-cache acceptance extended to the cold-binding edge case.
+
+    `MetadataCache.current()` raises `RuntimeError` when neither the contextvar
+    nor the process singleton is bound (direct-handler-call unit tests that
+    construct envelopes without going through the lifespan). The same degraded
+    contract that handles cold-cache (`_data is None` → `("", "")`) extends
+    naturally: read from `config.LICENSES` if available, otherwise empty.
+    Production paths always have the cache bound by `app.py` lifespan.
+    """
+    try:
+        return MetadataCache.current().license_for_sync(database)
+    except RuntimeError:
+        return config.LICENSES.get(database, ("", ""))
 
 
 class Provenance(BaseModel):
@@ -76,10 +111,16 @@ class Envelope(BaseModel):
     def for_database_list(cls, *, rows: list[dict]) -> Envelope:
         """Factory for list_databases responses.
 
-        D-08: license is config.LICENSE_MIXED ("mixed") because the response
-        spans all four databases, each potentially with a different per-DB license.
+        D-08 / D6-03: license is config.LICENSE_MIXED ("mixed") because the
+        response spans all four databases, each potentially with a different
+        per-DB license. `license_url=None` at envelope level — per-row
+        `license` + `license_url` are populated by `tools/discovery.py:list_databases`
+        from `MetadataCache.current().license_for_sync(name)`.
         D-07: database and table are None — the response is DB-agnostic.
-        D-09: retrieved_at is wallclock UTC at call time.
+        D6-09 / D6-11: retrieved_at sourced from the `RetrievedAtMiddleware`
+        ContextVar bound at start-of-tool-call. Safety-net DEBUG fallback to
+        wallclock-now when the middleware is bypassed (direct-handler-call unit
+        tests).
         """
         return cls(
             data=rows,
@@ -87,8 +128,9 @@ class Envelope(BaseModel):
                 source="data.zeeker.sg",
                 database=None,
                 table=None,
-                retrieved_at=datetime.now(tz=UTC),
+                retrieved_at=get_tool_started_at(),
                 license=config.LICENSE_MIXED,
+                license_url=None,
                 attribution=config.DEFAULT_ATTRIBUTION,
             ),
         )
@@ -99,22 +141,23 @@ class Envelope(BaseModel):
 
         D2-06: provenance scoped to a single database; table is None because
         this response spans all visible tables in the DB.
-        License: extracted from config.LICENSES tuple shape — Phase 6 D6-02
-        reshaped LICENSES to dict[str, tuple[str, str]]. Plan 06-02 rewires the
-        factory body to read MetadataCache.license_for_sync() (which returns the
-        same (text, url) tuple but with upstream-priority); for Plan 06-01 we
-        compatibility-extract the tuple's first element.
-        D-09: retrieved_at is wallclock UTC at call time.
+        D6-01 / D6-02 / D6-04: license + license_url sourced from
+        `MetadataCache.current().license_for_sync(database)` — upstream
+        `/-/metadata.json` non-empty value wins, otherwise `config.LICENSES`,
+        otherwise empty tuple. Empty-string `license_url` collapses to None
+        so the wire payload renders `null` rather than `""`.
+        D6-09 / D6-11: retrieved_at via the contextvar accessor.
         """
-        _license_tuple = config.LICENSES.get(database, ("", ""))
+        license_text, license_url = _license_pair(database)
         return cls(
             data=rows,
             provenance=Provenance(
                 source="data.zeeker.sg",
                 database=database,
                 table=None,
-                retrieved_at=datetime.now(tz=UTC),
-                license=_license_tuple[0],
+                retrieved_at=get_tool_started_at(),
+                license=license_text,
+                license_url=license_url or None,
                 attribution=config.DEFAULT_ATTRIBUTION,
             ),
         )
@@ -127,26 +170,26 @@ class Envelope(BaseModel):
         table: str,
         rows: list[dict],
         pagination: Pagination | None = None,
-        citation: str | None = None,  # TODO(phase-6, ENV-04): wire citation into provenance
     ) -> Envelope:
-        """Factory for per-table row responses (query_table, fetch, search).
+        """Factory for per-table row responses (query_table, fetch).
 
-        Provides a stable signature so future-phase handlers compile without
-        revisiting envelope code. Phase 1 ignores the citation parameter.
-        Phase 6 D6-02 reshaped LICENSES to dict[str, tuple[str, str]]; this
-        factory body compatibility-extracts the first element. Plan 06-02
-        rewires to MetadataCache.license_for_sync().
-        D-09: retrieved_at is wallclock UTC at call time.
+        D6-01 / D6-02 / D6-04: license + license_url sourced from
+        `MetadataCache.current().license_for_sync(database)`. D6-05: the
+        factory no longer accepts a `citation` parameter — per-row citation
+        lives in `data[i]["citation"]` attached by the handler row reshape
+        via `synthesize_citation(database, table, row, retrieved_at)`.
+        D6-09 / D6-11: retrieved_at via the contextvar accessor.
         """
-        _license_tuple = config.LICENSES.get(database, ("", ""))
+        license_text, license_url = _license_pair(database)
         return cls(
             data=rows,
             provenance=Provenance(
                 source="data.zeeker.sg",
                 database=database,
                 table=table,
-                retrieved_at=datetime.now(tz=UTC),
-                license=_license_tuple[0],
+                retrieved_at=get_tool_started_at(),
+                license=license_text,
+                license_url=license_url or None,
                 attribution=config.DEFAULT_ATTRIBUTION,
             ),
             pagination=pagination,
@@ -163,11 +206,10 @@ class Envelope(BaseModel):
         """Factory for cross-database search responses (D4-16, SEARCH-01..06).
 
         Mirrors `for_database_list`'s multi-DB provenance shape — database=None,
-        table=None, license=LICENSE_MIXED — because the response spans multiple
-        databases, each potentially with a different per-DB license. Adds a
-        `Pagination` block carrying the per-(db.table) `upstream_total_hits`
-        drill-down hint (D4-17) and the count of per-table fan-out tasks that
-        failed (`failed_tables` — D4-17).
+        table=None, license=LICENSE_MIXED, license_url=None per D6-03 — because
+        the response spans multiple databases. Per-row `license` + `license_url`
+        + `citation` are populated by `core/search.py::_one_table`, NOT by this
+        factory. D6-09 / D6-11: retrieved_at via the contextvar accessor.
 
         - rows: round-robin-merged preview rows (D4-05) already truncated to
           the caller-provided `limit` inside fan_out_search.
@@ -183,8 +225,9 @@ class Envelope(BaseModel):
                 source="data.zeeker.sg",
                 database=None,
                 table=None,
-                retrieved_at=datetime.now(tz=UTC),
+                retrieved_at=get_tool_started_at(),
                 license=config.LICENSE_MIXED,
+                license_url=None,
                 attribution=config.DEFAULT_ATTRIBUTION,
             ),
             pagination=Pagination(
