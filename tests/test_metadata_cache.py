@@ -262,18 +262,228 @@ async def test_license_for_sync_warm_cache_returns_upstream(bound_cache):
 
 
 @pytest.mark.live
-async def test_live_metadata_parseable():
-    """Live probe: real /-/metadata.json is parseable and sg-gov-newsrooms has CC-BY-4.0.
+@pytest.mark.parametrize("database", config.ALLOWED_DATABASES)
+async def test_live_metadata_parseable(database: str):
+    """Live probe: real /-/metadata.json is parseable and per-DB license is
+    either a non-empty string or None.
 
-    Requires ZEEKER_LIVE=1 to run. Verified 2026-05-13 against production endpoint.
+    D6.1-04 / Finding #3 rewrite (was: assertion against literal "CC-BY-4.0"
+    that drifted to "All rights reserved" within 48 hours on 2026-05-15). The
+    dual-layer model Phase 6 introduced (envelope Provenance.license carries
+    upstream-as-is; retrieved_content._policy.license carries the operator-
+    chosen content license) makes the specific upstream value irrelevant to
+    connector correctness. What matters at the live boundary is:
+
+      1. /-/metadata.json is reachable (HTTP 200 — implicit: get_database_license
+         would have raised through httpx if not).
+      2. Body parses as JSON (implicit: get_database_license would have raised).
+      3. get_database_license() returns a string OR None — never raises;
+         never returns the empty string (which would mask the D6.1-01
+         cold-cache root cause).
+
+    The dual-layer invariant — that _policy.license emits the operator-locked
+    value regardless of upstream drift — is asserted by
+    test_policy_license_unaffected_by_upstream_drift below (NOT live; uses
+    httpx_mock to stub a drifted upstream value).
+
+    Requires ZEEKER_LIVE=1.
     """
     http = httpx.AsyncClient(base_url=config.UPSTREAM_URL)
     cache = MetadataCache(http, config.UPSTREAM_URL, ttl=60)
     token = MetadataCache.bind(cache)
     try:
-        lic = await cache.get_database_license("sg-gov-newsrooms")
-        assert lic == "CC-BY-4.0"
+        lic = await cache.get_database_license(database)
+        # Acceptable return values per D2-03 + D6-04: a non-empty string
+        # (upstream populated the license field) OR None (upstream omitted
+        # the field — the D6-04 fallback chain handles this at the
+        # license_for/license_for_sync layer). The empty string is NOT
+        # acceptable — it would mask the D6.1-01 cold-cache root cause.
+        assert lic is None or (isinstance(lic, str) and lic != ""), (
+            f"{database}: get_database_license returned unexpected value: {lic!r}"
+        )
     finally:
         MetadataCache.reset(token)
         MetadataCache.clear_singleton()
         await http.aclose()
+
+
+# ---------------------------------------------------------------------------
+# D6.1-04 — dual-layer invariant: _policy.license is unaffected by upstream
+# license drift on /-/metadata.json. Non-live (uses httpx_mock).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "database,table,upstream_license",
+    [
+        ("sg-gov-newsrooms", "mlaw_news", "All rights reserved"),
+        ("sg-gov-newsrooms", "mlaw_news", "CC-BY-4.0"),
+        ("sg-gov-newsrooms", "mlaw_news", None),
+        ("pdpc", "enforcement_decisions_fragments", "Drifted random text"),
+    ],
+)
+async def test_policy_license_unaffected_by_upstream_drift(
+    database: str,
+    table: str,
+    upstream_license: str | None,
+    httpx_mock: pytest_httpx.HTTPXMock,
+    monkeypatch,
+):
+    """D6.1-04 dual-layer invariant: regardless of what upstream returns for
+    /-/metadata.json, the `_policy.license` emitted under `retrieved_content`
+    equals the operator-locked value in `config.CONTENT_POLICIES`.
+
+    Stubs the upstream /-/metadata.json with a drifted (or None) license
+    value, then dispatches `query_table` against a stubbed table-rows
+    response and asserts the emitted `_policy.license` is the SODL string
+    from `config.CONTENT_POLICIES` — the dual-layer (envelope-level
+    upstream-as-is vs `_policy`-level operator-locked) contract Phase 6
+    set up.
+
+    The test exercises the actual `query_table` handler with full
+    cache/middleware bindings so a future bug that accidentally couples
+    upstream license into `_policy` emission would re-trip the gate. A
+    test that only compared `CONTENT_POLICIES[key]["license"]` against
+    itself would be tautological — this stubbed-dispatch shape is the
+    only acceptable form per the plan's executor note.
+    """
+    import re
+    from datetime import UTC, datetime
+
+    from mcp_zeeker.core.datasette_client import DatasetteClient
+    from mcp_zeeker.core.fragment_join import ParentPKCache
+    from mcp_zeeker.core.middleware.retrieved_at import tool_started_at
+    from mcp_zeeker.tools.retrieval import query_table
+
+    # Heavy column per (db, table) — matches _HEAVY_COL_PER_TABLE in
+    # tests/test_content_policy_emission.py for these two entries.
+    heavy_col_per_table = {
+        ("sg-gov-newsrooms", "mlaw_news"): "content_text",
+        ("pdpc", "enforcement_decisions_fragments"): "text",
+    }
+    heavy_col = heavy_col_per_table[(database, table)]
+
+    # 1. Stub /-/metadata.json with the drifted upstream license value.
+    db_data: dict = {"tables": {}}
+    if upstream_license is not None:
+        db_data["license"] = upstream_license
+    httpx_mock.add_response(
+        url=f"{config.UPSTREAM_URL}/-/metadata.json",
+        json={"databases": {database: db_data}},
+        is_reusable=True,
+    )
+
+    # 2. Build the visible upstream surface (every light column + heavy_col).
+    cols = list(config.LIGHT_COLUMNS.get(f"{database}.{table}", []))
+    if heavy_col not in cols:
+        cols.append(heavy_col)
+
+    # 3. Stub /{database}.json with the table visible.
+    httpx_mock.add_response(
+        url=f"{config.UPSTREAM_URL}/{database}.json",
+        json={
+            "tables": [
+                {
+                    "name": table,
+                    "hidden": False,
+                    "count": 1,
+                    "columns": cols,
+                    "primary_keys": [],
+                    "fts_table": None,
+                }
+            ]
+        },
+        is_reusable=True,
+    )
+    # 4. Stub /{database}/_zeeker_schemas.json (column-types lookup).
+    httpx_mock.add_response(
+        url=f"{config.UPSTREAM_URL}/{database}/_zeeker_schemas.json",
+        json={
+            "columns": [
+                "resource_name",
+                "schema_version",
+                "schema_hash",
+                "column_definitions",
+                "created_at",
+                "updated_at",
+            ],
+            "rows": [],
+        },
+        is_reusable=True,
+    )
+    # 5. Stub /{database}/{table}.json row payload — fill every column.
+    base = re.escape(config.UPSTREAM_URL.rstrip("/"))
+    table_url_re = re.compile(rf"^{base}/{re.escape(database)}/{re.escape(table)}\.json(\?.*)?$")
+    row = {c: "fixture" for c in cols}
+    row[heavy_col] = "heavy fixture body"
+    httpx_mock.add_response(
+        url=table_url_re,
+        json={
+            "rows": [row],
+            "columns": cols,
+            "next": None,
+            "truncated": False,
+            "filtered_table_rows_count": 1,
+        },
+        is_reusable=True,
+    )
+
+    # 6. Bind DatasetteClient + MetadataCache + ParentPKCache + tool_started_at.
+    async with httpx.AsyncClient(base_url=config.UPSTREAM_URL) as http:
+        dc_token = DatasetteClient.bind(DatasetteClient(http))
+        mc = MetadataCache(http, config.UPSTREAM_URL, ttl=60)
+        mc_token = MetadataCache.bind(mc)
+        pk_token = ParentPKCache.bind(ParentPKCache())
+        rt_token = tool_started_at.set(datetime(2026, 1, 1, tzinfo=UTC))
+        try:
+            # Warm the metadata cache — consumes the stubbed /-/metadata.json
+            # mock above with the DRIFTED upstream_license value AND verifies
+            # the warm-cache layer is observing the drift. This ensures the
+            # rest of the test exercises license_for_sync warm-cache logic
+            # (not cold-cache D6.1-01 fallback).
+            await mc.force_refresh()
+            warm_lic, _ = mc.license_for_sync(database)
+            if upstream_license:
+                # Warm cache reflects the drifted upstream value.
+                assert warm_lic == upstream_license, (
+                    f"warm cache failed to observe drifted upstream license: "
+                    f"expected {upstream_license!r}, got {warm_lic!r}"
+                )
+            else:
+                # Upstream omitted license — D6-04 fallback chain to
+                # config.LICENSES (CC-BY-4.0 for known DBs).
+                assert warm_lic == config.LICENSES[database][0], (
+                    f"warm-but-empty fallback failed: expected "
+                    f"{config.LICENSES[database][0]!r}, got {warm_lic!r}"
+                )
+
+            envelope = await query_table(
+                database=database,
+                table=table,
+                columns=[heavy_col],
+                limit=1,
+            )
+        finally:
+            tool_started_at.reset(rt_token)
+            ParentPKCache.reset(pk_token)
+            MetadataCache.reset(mc_token)
+            DatasetteClient.reset(dc_token)
+            MetadataCache.clear_singleton()
+            DatasetteClient.clear_singleton()
+            ParentPKCache.clear_singleton()
+
+    # 7. THE INVARIANT: regardless of `upstream_license`, `_policy.license`
+    #    is the operator-locked value from config.CONTENT_POLICIES.
+    rows = envelope.data
+    assert len(rows) == 1, f"expected 1 row, got {len(rows)}"
+    rc = rows[0].get("retrieved_content")
+    assert rc is not None, f"retrieved_content missing: {rows[0]!r}"
+    emitted_policy = rc.get("_policy")
+    assert emitted_policy is not None, f"_policy missing: {rc!r}"
+    expected_license = config.CONTENT_POLICIES[(database, table)]["license"]
+    assert emitted_policy["license"] == expected_license, (
+        f"Dual-layer invariant violated: upstream license drifted to "
+        f"{upstream_license!r} but _policy.license should still emit "
+        f"operator-locked {expected_license!r}, got "
+        f"{emitted_policy['license']!r}"
+    )
