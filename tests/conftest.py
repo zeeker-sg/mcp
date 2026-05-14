@@ -321,3 +321,81 @@ async def bound_metadata_cache(httpx_mock: pytest_httpx.HTTPXMock):
         yield mc
         MetadataCache.reset(token)
         MetadataCache.clear_singleton()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Fragment-join fixtures (single-plan-touch rule per 02-LEARNINGS)
+# ---------------------------------------------------------------------------
+# All Phase 5 conftest additions live in Plan 05-01 ONLY. Plans 05-02 / 05-03 /
+# 05-04 MUST NOT modify this file. The cross-plan merge-conflict learning from
+# Phase 2 / 3 / 4 dictates consolidation: any helper Wave 2 or Wave 3 needs is
+# pre-included here.
+
+_FRAGMENTS_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "datasette" / "fragments"
+
+
+def _load_fragments_fixture(filename: str) -> dict:
+    """Load a captured fragment-join response — Phase 5 (D5-04 / 05-RESEARCH §2).
+
+    10 fixtures captured in research:
+      zeeker_judgements__judgments__parent_lookup.json — Call 1, single-row parent
+      zeeker_judgements__judgments_fragments__page1.json — Call 2, small page
+      zeeker_judgements__judgments_fragments__large_page1.json — 957-frag walk, p1
+      zeeker_judgements__judgments_fragments__large_page10.json — 957-frag walk,
+        p10/10 (terminal — `next: null`)
+      zeeker_judgements__judgments__multi_match.json — FRAG-06 multi-match
+        (2 stale-duplicate rows)
+      zeeker_judgements__judgments__url_encoding_probe.json — Special-char URL
+      sglawwatch__about_singapore_law__parent_lookup.json
+      sglawwatch__about_singapore_law_fragments__page1.json
+      pdpc__enforcement_decisions__parent_lookup.json
+      pdpc__enforcement_decisions_fragments__page1.json
+    """
+    return json.loads((_FRAGMENTS_FIXTURE_DIR / filename).read_text())
+
+
+@pytest.fixture
+async def bound_parent_pk_cache():
+    """Bind a ParentPKCache (ttl=0 — every read after set returns miss) to the
+    current context. Mirrors `bound_metadata_cache` shape.
+
+    Function-body import avoids module-import cycles if fragment_join evolves
+    its top-level imports.
+    """
+    from mcp_zeeker.core.fragment_join import ParentPKCache
+
+    cache = ParentPKCache(ttl=0)
+    token = ParentPKCache.bind(cache)
+    yield cache
+    ParentPKCache.reset(token)
+    ParentPKCache.clear_singleton()
+
+
+def stub_fragment_join_two_step(
+    httpx_mock: pytest_httpx.HTTPXMock,
+    *,
+    database: str,
+    parent_table: str,
+    fragment_table: str,
+    parent_lookup_payload: dict,
+    fragments_payload: dict,
+) -> None:
+    """Register ordered upstream stubs for the two-step fragment join.
+
+    Plan 05-02 / 05-03 tests call this helper. Order matters: Call 1 (parent
+    lookup) is registered BEFORE Call 2 (fragments). Per 02-LEARNINGS, do
+    NOT use `is_reusable=True` here — ordered consumption is required for
+    deterministic test behavior. Use additional explicit add_response calls
+    for multi-page walks (the helper handles ONE page; loop in the test).
+    """
+    import re as _re
+
+    upstream = config.UPSTREAM_URL.rstrip("/")
+    parent_url_re = _re.compile(
+        rf"^{_re.escape(upstream)}/{_re.escape(database)}/{_re.escape(parent_table)}\.json(\?.*)?$"
+    )
+    fragments_url_re = _re.compile(
+        rf"^{_re.escape(upstream)}/{_re.escape(database)}/{_re.escape(fragment_table)}\.json(\?.*)?$"
+    )
+    httpx_mock.add_response(url=parent_url_re, json=parent_lookup_payload)
+    httpx_mock.add_response(url=fragments_url_re, json=fragments_payload)
