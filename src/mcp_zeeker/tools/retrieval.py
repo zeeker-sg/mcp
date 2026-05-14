@@ -30,6 +30,17 @@ Slice B (Plan 03-03 ships here): query_table is feature-complete for QUERY-01..1
 - The two Plan 03-02 scope-boundary raises ("cursor not yet supported on this
   slice" / "heavy column projection not yet supported on this slice") and
   their grep-discoverable cleanup markers have been removed entirely.
+
+Phase 6 / Plan 06-02:
+- query_table row reshape attaches `_policy` INSIDE `retrieved_content` when
+  heavy is requested (D6-13/14/15) AND a per-row `citation` at row top level
+  (D6-05/06/07/08). `_policy` reads `config.CONTENT_POLICIES.get((db, table))`
+  with a D6-15 fallback that synthesizes the policy from the envelope license.
+- fetch attaches per-row `citation` at row top level; no `_policy` — fetch
+  strips HEAVY_COLUMNS at column-projection time so `retrieved_content` is
+  never present (D6-14 — _policy lives ONLY adjacent to heavy text).
+- Both handlers capture `retrieved_at_for_call` ONCE so every row in a single
+  response shares the same timestamp (D6-09 single-timestamp-per-tool-call).
 """
 
 from __future__ import annotations
@@ -43,6 +54,7 @@ from pydantic import Field
 
 from mcp_zeeker import config
 from mcp_zeeker.core import fragment_join  # Phase 5 / D5-01 — sole delegation point
+from mcp_zeeker.core.citation import synthesize_citation
 from mcp_zeeker.core.config_lookup import url_column_for
 from mcp_zeeker.core.cursor import (
     canonical_shape_str,
@@ -54,6 +66,8 @@ from mcp_zeeker.core.cursor import (
 from mcp_zeeker.core.datasette_client import DatasetteClient, UpstreamCallFailed
 from mcp_zeeker.core.envelope import Envelope, Pagination
 from mcp_zeeker.core.filter_compiler import Filter, compile_filters
+from mcp_zeeker.core.metadata_cache import MetadataCache
+from mcp_zeeker.core.middleware.retrieved_at import get_tool_started_at
 from mcp_zeeker.core.visibility import (
     _resolve_table,
     _visible_columns,
@@ -432,18 +446,63 @@ async def query_table(
     except UpstreamCallFailed:
         raise ToolError("upstream_unavailable: upstream call failed") from None
 
-    # Step 13: reshape rows (D3-05). Light columns stay at the top level; heavy
-    # columns are re-keyed under `retrieved_content`. The `retrieved_content` key
-    # appears ONLY when heavy_to_emit is non-empty — default-light responses
-    # MUST NOT carry a retrieved_content key (D3-19 snapshot contract).
-    # rowid never appears at top level because it is never in light_to_emit.
+    # Step 13: reshape rows (D3-05 / Phase 6 D6-05/06/07/08 + D6-13/14/15).
+    # Light columns stay at the top level; heavy columns are re-keyed under
+    # `retrieved_content`. The `retrieved_content` key appears ONLY when
+    # heavy_to_emit is non-empty — default-light responses MUST NOT carry a
+    # retrieved_content key (D3-19 snapshot contract). rowid never appears at
+    # top level because it is never in light_to_emit.
+    #
+    # Phase 6 / Plan 06-02:
+    #   * Per-row `citation` is attached at row top level for every row,
+    #     regardless of heavy projection (D6-05/06/07/08).
+    #   * When heavy_to_emit is non-empty, `_policy` is attached INSIDE
+    #     retrieved_content (D6-13 / D6-14 — _policy lives only adjacent to
+    #     heavy text). config.CONTENT_POLICIES.get((database, table)) supplies
+    #     the operator-authored policy; if the key is absent, the D6-15
+    #     fallback minimal policy `{source, license, license_url, redistribution}`
+    #     is synthesized from the envelope license. The HEAVY_COLUMNS frozenset
+    #     was extended with `_policy` in Plan 06-01 so the existing
+    #     `set(retrieved_content) ⊆ HEAVY_COLUMNS` snapshot contract holds.
+    #   * retrieved_at_for_call is captured ONCE here at the start of the
+    #     reshape so every row in this response shares the same instant
+    #     (D6-09 single-timestamp-per-tool-call).
+    retrieved_at_for_call = get_tool_started_at()
     reshaped: list[dict] = []
     for upstream_row in result.get("rows", []) or []:
         row: dict = {c: upstream_row[c] for c in light_to_emit if c in upstream_row}
         if heavy_to_emit:
-            row["retrieved_content"] = {
-                c: upstream_row[c] for c in heavy_to_emit if c in upstream_row
-            }
+            retrieved = {c: upstream_row[c] for c in heavy_to_emit if c in upstream_row}
+            # D6-13 / D6-14: attach per-(db, table) policy adjacent to heavy text.
+            policy = config.CONTENT_POLICIES.get((database, table))
+            if policy is not None:
+                retrieved["_policy"] = policy
+            else:
+                # D6-15 fallback — minimal _policy with envelope license values.
+                # Reachable only when (db, table) is not in CONTENT_POLICIES;
+                # Probe 3 populated all 14 currently-heavy-emitting tables, so
+                # this branch is defensive for future config drift. Same
+                # bound-cache fallback discipline as core/envelope.py /
+                # tools/discovery.py.
+                try:
+                    lic_text, lic_url = MetadataCache.current().license_for_sync(database)
+                except RuntimeError:
+                    lic_text, lic_url = config.LICENSES.get(database, ("", ""))
+                retrieved["_policy"] = {
+                    "source": database,
+                    "license": lic_text,
+                    "license_url": lic_url or None,
+                    "redistribution": "allowed",
+                }
+            row["retrieved_content"] = retrieved
+        # D6-05/06/07/08: per-row citation always at row top level (not inside
+        # retrieved_content) — emitted regardless of heavy projection so the
+        # LLM can cite light-projection rows too. Underscore-prefixed key
+        # `_citation` avoids collision with upstream columns literally named
+        # `citation` (e.g., judgments.citation = "2026 SGDC 136") — same
+        # convention as `_policy` (Plan 06-01: HEAVY_COLUMNS += "_policy");
+        # `_citation` is THE canonical key documented in core/citation.py.
+        row["_citation"] = synthesize_citation(database, table, upstream_row, retrieved_at_for_call)
         reshaped.append(row)
 
     # Step 14: encode next cursor + surface truncation. encode_cursor binds the
@@ -641,8 +700,16 @@ async def fetch(
     # `sorted(emit_cols)` gives deterministic key order — useful for snapshot
     # tests. Skip columns that are absent from the upstream response (sparse
     # row fields cope gracefully).
+    #
+    # Phase 6 / D6-05/06/07/08: attach per-row `citation` at row top level.
+    # fetch strips HEAVY_COLUMNS at Step 5 (emit_cols = visible - HEAVY_COLUMNS
+    # - fk_to_exclude), so retrieved_content / _policy are not present on this
+    # path (D6-14 — _policy lives ONLY inside retrieved_content).
     first = rows[0]
     row_dict = {c: first[c] for c in sorted(emit_cols) if c in first}
+    # `_citation` underscore prefix avoids collision with upstream `citation`
+    # columns (e.g., judgments.citation). See core/citation.py docstring.
+    row_dict["_citation"] = synthesize_citation(database, table, first, get_tool_started_at())
 
     # Step 8: single-row envelope. No pagination — fetch never paginates.
     return Envelope.for_rows(database=database, table=table, rows=[row_dict])

@@ -322,10 +322,13 @@ async def test_preview_shape_uniform(datasette_client, httpx_mock: pytest_httpx.
         "url",
         "database",
         "table",
-        # Phase 6 / D6-03 + D6-05 additions:
+        # Phase 6 / D6-03 + D6-05 additions. `_citation` (underscore prefix)
+        # avoids collision with upstream columns literally named `citation`
+        # (e.g., judgments.citation). Matches the canonical convention in
+        # core/citation.py.
         "license",
         "license_url",
-        "citation",
+        "_citation",
     }
     for row in envelope.data:
         assert set(row.keys()) == expected_keys, (

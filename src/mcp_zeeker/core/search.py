@@ -246,7 +246,10 @@ async def _one_table(
                 # D6-05/06/07/08: per-row citation. synthesize_citation reads
                 # config.CITATION_TEMPLATES[(db, table)] with DEFAULT_CITATION_TEMPLATE
                 # fallback; _SafeDict handles None values + injects {retrieved_at}.
-                "citation": synthesize_citation(db, table, r, retrieved_at_for_call),
+                # Underscore-prefixed `_citation` key matches the canonical
+                # convention in core/citation.py (avoids collision with
+                # upstream columns literally named `citation`).
+                "_citation": synthesize_citation(db, table, r, retrieved_at_for_call),
             }
         )
     out_rows[(db, table)] = normalized
