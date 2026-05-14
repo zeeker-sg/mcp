@@ -1,28 +1,29 @@
 ---
 phase: 03-structured-retrieval-url-keyed-fetch
 verified: 2026-05-13T17:32:02Z
-status: human_needed
-score: 5/5 must-haves verified (automated); 1 manual checkpoint outstanding
+human_verified_at: 2026-05-14
+status: complete
+score: 5/5 must-haves verified (automated); all 4 manual checkpoints resolved via 03-HUMAN-UAT.md
 overrides_applied: 0
 re_verification:
-  previous_status: null
-  previous_score: null
-  gaps_closed: []
+  previous_status: human_needed
+  previous_score: 5/5 must-haves verified (automated); 1 manual checkpoint outstanding
+  gaps_closed: ["all 4 human_verification items"]
   gaps_remaining: []
   regressions: []
-human_verification:
+human_verification_resolved:
   - test: "Walk tests/manual/PHASE3-CLIENT-VERIFY.md against Claude Desktop (6 scenarios)"
     expected: "All 6 scenarios pass; ☐ boxes ticked; sign-off line filled in"
-    why_human: "D3-20 / Plan 03-04 Task 3 is a checkpoint:human-verify (autonomous: false). The walkthrough exercises real MCP client behavior (filter-by-date, cursor walk, opt-in heavy, fetch known URL, unsupported fetch, cursor shape-mismatch) against a live MCP transport — no automated harness can confirm UX-level acceptance."
+    resolved_by: "03-HUMAN-UAT.md Test 1 — all 6 scenarios green 2026-05-14, sign-off line filled (operator: houfu)"
   - test: "Walk Claude Code parity for scenarios 1, 3, 4"
     expected: "Same behavior observed on Claude Code as Claude Desktop"
-    why_human: "Two-client parity is a discovery-time concern: the same MCP server may surface different JSON-rendering behavior depending on the client. Requires human inspection."
+    resolved_by: "03-HUMAN-UAT.md Test 2 — byte-exact envelope parity confirmed on S1 (10 rows), S3 (content_text lengths 40331/61016/57476 match to the byte), S4 (single-row light-only fetch)"
   - test: "Confirm no INJ-05 leakage in transcripts (no canary or filter-value text in visible error messages)"
     expected: "No URL, filter value, or canary string appears in any user-facing error during the walkthrough"
-    why_human: "Programmatic checks cover the captured stdout/stderr/log paths; a human walking the LLM transcripts is the final audit gate for what the model could observe."
+    resolved_by: "03-HUMAN-UAT.md Test 3 — both error-path gates (S5 unsupported_table_for_fetch, S6 invalid_cursor) confirmed fixed-literal with no user-input echo"
   - test: "F-4 dry-run: execute at least 3 of 5 curl/JSON-RPC examples (A–E) against the live target"
     expected: "Wire-level responses match the documented expected response per example"
-    why_human: "F-4 obligation per Phase 1 LEARNINGS — wire-level evidence is the contract before UI walkthrough."
+    resolved_by: "03-HUMAN-UAT.md Test 4 — 5/5 examples A–E executed wire-level against https://mcp.zeeker.sg/mcp/; INJ-05 grep audit confirms no example.com / NONEXISTENT_999 / 9999 / elitigation substrings in error bodies D + E"
 gaps: []
 deferred:
   - truth: "pagination.truncated upstream wiring (consumer side)"
