@@ -125,7 +125,7 @@ Plans:
 Plans:
 - [x] 05-01-PLAN.md — Foundation: FRAGMENT_PARENTS parent_match_order_by extension + cursor keyset functions + core/fragment_join.py (normalize_url GREEN + ParentPKCache GREEN + compile_filter SKELETON) + tests/conftest.py consolidation + Wave-0 stubs
 - [x] 05-02-PLAN.md — Walking slice: compile_filter body + tools/retrieval.py 5 micro-additions (allowed_extra_columns + delegation + limit re-clamp + keyset cursor swap + _nocount=1) + D5-09 description note + app.py lifespan + 7 handler tests GREEN
-- [ ] 05-03-PLAN.md — Hardening: 5-canary INJ-05 hostile-URL corpus + multi-match warning URL-hash assertion + 1500-fragment synthetic regression + pagination.truncated honesty + ParentPKCache cache-hit
+- [x] 05-03-PLAN.md — Hardening: 5-canary INJ-05 hostile-URL corpus + multi-match warning URL-hash assertion + 1500-fragment synthetic regression + pagination.truncated honesty + ParentPKCache cache-hit
 - [ ] 05-04-PLAN.md — Manual UAT: tests/manual/PHASE5-CLIENT-VERIFY.md (8 scenarios + F-4 dry-run sign-off)
 **UI hint**: no
 **Research flag**: needs phase research — fragment-join orchestration, multi-match parent semantics, truncation handling; recommend `/gsd-research-phase` before planning
