@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 6 context gathered
-last_updated: "2026-05-14T22:04:04.760Z"
-last_activity: 2026-05-14 -- Phase 06.1 execution started
+status: ready_to_plan
+stopped_at: Phase 06.1 complete; Phase 7 not yet planned
+last_updated: "2026-05-14T22:45:00.000Z"
+last_activity: 2026-05-14 -- Phase 06.1 complete (4 fixes, 334 passed/7 skipped, 5/5 must-haves verified)
 progress:
   total_phases: 10
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 25
   completed_plans: 24
-  percent: 96
+  percent: 70
 ---
 
 # Project State
@@ -21,24 +21,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-14)
 
 **Core value:** Every successful response is citation-ready, scope-bounded, and safe to feed back into an LLM — provenance attached, hidden internal data stripped, retrieved third-party text labeled as data rather than instructions.
-**Current focus:** Phase 06.1 — envelope-hardening-gaps
+**Current focus:** Phase 7 — rate limit + structured errors + healthz + logs (not yet planned)
 
 ## Current Position
 
-Phase: 06.1 (envelope-hardening-gaps) — EXECUTING
-Plan: 1 of 1
-Status: Executing Phase 06.1
-Last activity: 2026-05-14 -- Phase 06.1 execution started
+Phase: 7
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-05-14 — Phase 06.1 complete (gap closure for cold-cache license, citation augmentation, mlaw_news heavy column, live drift)
 
-**Resume:** After operator UAT sign-off, continue with `/gsd-code-review 06`, `/gsd-verify-work 06`, then `/gsd-execute-phase 06` (re-runs verification only since all SUMMARYs exist).
+**Resume:** Phase 7 is research-flagged (`/gsd-research-phase 7` for token-bucket + XFF semantics + eviction policy) before `/gsd-discuss-phase 7` → `/gsd-plan-phase 7` → `/gsd-execute-phase 7`. Phase 6 manual UAT sign-off in `tests/manual/PHASE6-CLIENT-VERIFY.md` remains UNSIGNED — separate operator gate, not blocking Phase 7 work.
 
-Progress: [████████████████████] 13/13 plans (100%)
+Progress: [██████████████░░░░░░] 24/25 plans (96%) — milestone v1.0 covers phases 1–9 plus 6.1 insertion
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 21 (across phases 1–3)
+- Total plans completed: 22 (across phases 1–3)
 - Average duration: —
 - Total execution time: — hours
 
@@ -49,6 +49,7 @@ Progress: [████████████████████] 13/13 p
 | 3 | 4 | - | - |
 | 04 | 4 | - | - |
 | 05 | 4 | - | - |
+| 06.1 | 1 | - | - |
 
 **Recent Trend:**
 
