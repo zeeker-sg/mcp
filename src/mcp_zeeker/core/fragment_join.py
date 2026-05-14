@@ -365,7 +365,25 @@ async def compile_filter(
                 )
                 return ([], None)
 
-            parent_pk = rows[0][fragment_parent["parent_pk"]]
+            # WR-02 (defensive): upstream schema drift could drop the
+            # parent_pk column from the response (e.g., a `_col=` filter
+            # mismatch we never expected). `.get()` with None fallback
+            # treats the missing-column case as a no-match — same path as
+            # the empty-rows branch above. INJ-05: the warning binds only
+            # the column name (from config, not user input), NEVER the URL.
+            parent_pk = rows[0].get(fragment_parent["parent_pk"])
+            if parent_pk is None:
+                log.warning(
+                    "fragment_parent_pk_column_missing",
+                    database=database,
+                    parent_table=parent_table,
+                    parent_pk_column=fragment_parent["parent_pk"],
+                )
+                cache._data.setdefault(database, {}).setdefault(parent_table, {})[normalized] = (
+                    None,
+                    time.monotonic() + cache._ttl,
+                )
+                return ([], None)
             cache._data.setdefault(database, {}).setdefault(parent_table, {})[normalized] = (
                 parent_pk,
                 time.monotonic() + cache._ttl,

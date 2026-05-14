@@ -362,7 +362,31 @@ async def query_table(
             # decode_keyset_cursor raises ToolError(invalid_cursor: keyset
             # cursor is malformed) on any decode failure — D5-07 fixed literal,
             # propagate untouched.
-            last_order_by_value, last_id = decode_keyset_cursor(cursor, canonical_shape)
+            last_order_by_value, last_id_suffix = decode_keyset_cursor(cursor, canonical_shape)
+            # CR-01 fix: cursor encodes only the suffix (parent_pk-stripped);
+            # reconstruct the full id by prepending the resolved parent_pk
+            # from the rewritten normalized_filters (synthetic parent_fk eq
+            # filter that compile_filter produced). Symmetric with the encode
+            # site strip — FRAG-02 / D5-06 preserved: the parent_pk substring
+            # never appears in the LLM-visible cursor token.
+            _parent_pk_for_reconstruct = next(
+                (
+                    str(f.value)
+                    for f in normalized_filters
+                    if fragment_parent_meta is not None
+                    and f.column == fragment_parent_meta["parent_fk"]
+                    and f.op == "exact"
+                ),
+                None,
+            )
+            if _parent_pk_for_reconstruct is None:
+                # Defensive: cursor decoded successfully but the rewritten
+                # filter is gone (e.g., negative cache hit after the user's
+                # original URL re-resolved to no-match across a TTL boundary).
+                # Reject with the locked-catalog message — the user's cursor
+                # was tied to a parent that no longer matches.
+                raise ToolError("invalid_cursor: cursor does not match current request shape")
+            last_id = f"{_parent_pk_for_reconstruct}_{last_id_suffix}"
             datasette_next = f"{last_order_by_value},{last_id}"
     else:
         canonical_shape = canonical_shape_str(database, table, sort, normalized_filters, columns)
@@ -434,8 +458,58 @@ async def query_table(
     # keyset encoder so the cursor payload preserves the (order_by, id)
     # tiebreak that FRAG-03 requires.
     if fragment_join_active and result.get("next"):
-        _last_ord, _last_id = result["next"].split(",", 1)
-        next_cursor = encode_keyset_cursor(canonical_shape, _last_ord, _last_id)
+        # WR-03 (defensive): Datasette's keyset `next` token is documented as
+        # "<order_by_value>,<id>"; if upstream ever returns a single-segment
+        # token (e.g., a future Datasette wire-format change), `split(",", 1)`
+        # would raise ValueError on unpack. Drop the next_cursor in that case
+        # — the LLM gets a single-page response, FRAG-04 truncated still
+        # surfaces honestly via the separate flag.
+        _parts = result["next"].split(",", 1)
+        if len(_parts) != 2:
+            log.warning(
+                "fragment_keyset_next_token_malformed",
+                database=database,
+                table=table,
+            )
+            next_cursor = None
+        else:
+            _last_ord, _last_id = _parts
+            # CR-01 fix: STRIP the `f"{parent_pk}_"` prefix from `_last_id`
+            # before encoding. Production fragment IDs follow the pattern
+            # `<parent_pk>_<suffix>` (zero-padded ordinal for judgments,
+            # section number for sglawwatch, `chunk_<seq>` for pdpc — all
+            # 3 patterns verified). Leaving parent_pk in the encoded cursor
+            # leaks it via trivially-reversible base64 (FRAG-02 / D5-06).
+            # parent_pk is sourced from the rewritten `normalized_filters`
+            # — the synthetic Filter(parent_fk, "exact", parent_pk) that
+            # `fragment_join.compile_filter` produced. Re-resolved on the
+            # decode side from the same source.
+            _parent_pk_for_strip = next(
+                (
+                    str(f.value)
+                    for f in normalized_filters
+                    if fragment_parent_meta is not None
+                    and f.column == fragment_parent_meta["parent_fk"]
+                    and f.op == "exact"
+                ),
+                None,
+            )
+            if _parent_pk_for_strip is not None and _last_id.startswith(f"{_parent_pk_for_strip}_"):
+                _suffix = _last_id[len(_parent_pk_for_strip) + 1 :]
+            else:
+                # Defensive: the prefix MUST be present for the 3 current
+                # fragment tables; if a future table breaks the convention,
+                # drop the next_cursor rather than leak the full id.
+                log.warning(
+                    "fragment_keyset_id_prefix_missing",
+                    database=database,
+                    table=table,
+                )
+                _suffix = None
+            if _suffix is None:
+                next_cursor = None
+            else:
+                next_cursor = encode_keyset_cursor(canonical_shape, _last_ord, _suffix)
     elif result.get("next"):
         next_cursor = encode_cursor(canonical_shape, result["next"])
     else:

@@ -232,7 +232,7 @@ def _synth_intermediate_page(page_num: int, template_row: dict) -> dict:
         ordinal = (page_num - 1) * 100 + i
         new_row = copy.deepcopy(template_row)
         new_row["ordinal"] = ordinal
-        new_row["id"] = f"66e73dfa5db4_{ordinal:04d}"
+        new_row["id"] = f"1021426d3e2a_{ordinal:04d}"
         rows.append(new_row)
     last = rows[-1]
     return {
@@ -260,7 +260,8 @@ def _synth_page(
 
     page_num is 0-indexed. Each row carries:
       ordinal = page_num * page_size + i for i in range(page_size)
-      id      = f"synth_judg_{ordinal:04d}"
+      id      = f"{parent_id}_{ordinal:04d}"  (matches production <parent_pk>_<suffix>
+                pattern so the CR-01 cursor-encoding prefix-strip works correctly)
 
     The terminal page (page_num == total_pages - 1) has `next = None`;
     intermediate pages have `next = f"{last_ord},{last_id}"` per the Datasette
@@ -277,7 +278,7 @@ def _synth_page(
     start_ord = page_num * page_size
     rows = [
         {
-            "id": f"synth_judg_{start_ord + i:04d}",
+            "id": f"{parent_id}_{start_ord + i:04d}",
             "judgment_id": parent_id,
             "ordinal": start_ord + i,
             "paragraph_number": start_ord + i,
@@ -467,6 +468,73 @@ async def test_no_internal_ids_in_response(
             assert set(retrieved.keys()) & forbidden == set(), (
                 f"forbidden keys leaked into retrieved_content: {set(retrieved.keys()) & forbidden}"
             )
+
+
+# ---------------------------------------------------------------------------
+# CR-01 regression — keyset cursor must never carry parent_pk substring
+# ---------------------------------------------------------------------------
+
+
+async def test_cursor_never_contains_parent_pk_substring(
+    bound_parent_pk_cache,
+    datasette_client,
+    metadata_cache,
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """CR-01 end-to-end regression — handler-level proof that the next_cursor
+    returned to the LLM never contains the parent_pk as a base64-decodable
+    substring. Production fragment IDs follow `<parent_pk>_<suffix>` so the
+    raw `last_id` field of the upstream `next` token would leak parent_pk
+    unless the handler strips the prefix before encoding (CR-01 fix in
+    tools/retrieval.py)."""
+    import base64
+
+    page1 = _load_fragments_fixture("zeeker_judgements__judgments_fragments__page1.json")
+
+    httpx_mock.add_response(
+        url=_db_url("zeeker-judgements"), json=_judgments_db_payload(), is_reusable=True
+    )
+    httpx_mock.add_response(
+        url=_zeeker_schemas_url("zeeker-judgements"), json=_empty_schema_payload()
+    )
+    httpx_mock.add_response(
+        url=_table_url_re("zeeker-judgements", "judgments"),
+        json=_load_fragments_fixture("zeeker_judgements__judgments__parent_lookup.json"),
+    )
+    # Force a non-None upstream next so encode_keyset_cursor fires.
+    page1_with_next = copy.deepcopy(page1)
+    page1_with_next["next"] = "9,1021426d3e2a_0009"
+    httpx_mock.add_response(
+        url=_table_url_re("zeeker-judgements", "judgments_fragments"),
+        json=page1_with_next,
+    )
+
+    envelope = await query_table(
+        database="zeeker-judgements",
+        table="judgments_fragments",
+        filters=[
+            Filter(
+                column="source_url",
+                op="exact",
+                value="https://www.elitigation.sg/gd/s/2026_SGFC_46",
+            )
+        ],
+    )
+
+    assert envelope.pagination is not None
+    assert envelope.pagination.next_cursor is not None
+    cursor = envelope.pagination.next_cursor
+    parent_pk = "1021426d3e2a"  # from the parent_lookup fixture rows[0]["id"]
+
+    # Base64 is trivially reversible — verify parent_pk is NOT in the decoded
+    # payload (FRAG-02 / D5-06: cursor tokens that decode to internal IDs
+    # are LLM-visible leaks).
+    padded = cursor + "=" * (-len(cursor) % 4)
+    decoded = base64.urlsafe_b64decode(padded).decode()
+    assert parent_pk not in decoded, (
+        f"FRAG-02 violation — parent_pk {parent_pk!r} substring found in "
+        f"base64-decoded next_cursor payload {decoded!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
