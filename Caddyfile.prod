@@ -14,6 +14,11 @@ mcp.zeeker.sg {
     @scrapers header_regexp User-Agent `meta-externalagent|meta-webindexer|facebookexternalhit|FacebookBot`
     respond @scrapers 403
 
+    # Starlette's Mount("/mcp") redirects exact /mcp → /mcp/ with 308.
+    # Rewrite here so clients that omit the trailing slash get a direct 200.
+    @mcp_exact path /mcp
+    rewrite @mcp_exact /mcp/
+
     reverse_proxy 127.0.0.1:8002 {
         # OVERWRITE (not append) X-Forwarded-For with the direct client IP.
         # The MCP server's in-memory rate limiter reads ip_prefix from this
