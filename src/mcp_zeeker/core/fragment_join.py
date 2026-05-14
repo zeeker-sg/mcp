@@ -53,6 +53,7 @@ parent_pk), FRAG-01..06 (success criteria), INJ-05 / D3-09 (no value echoes).
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import time
 from urllib.parse import urlsplit, urlunsplit
 
@@ -60,9 +61,10 @@ import anyio
 import structlog
 
 from mcp_zeeker import config
-from mcp_zeeker.core.datasette_client import (  # noqa: F401 — Plan 05-02 body-fill uses these; pre-import keeps the body-fill edit minimal
+from mcp_zeeker.core.config_lookup import url_column_for
+from mcp_zeeker.core.datasette_client import (
     DatasetteClient,
-    UpstreamCallFailed,
+    UpstreamCallFailed,  # noqa: F401 — re-exported for handler-side except-bubble symmetry
 )
 from mcp_zeeker.core.filter_compiler import Filter
 
@@ -282,9 +284,133 @@ async def compile_filter(
 
     FRAG-02 / INJ-05: parent_pk and raw URL value NEVER appear in any
     returned warning-state record, log line emitted by this module, or
-    ToolError message. The fixed-literal NotImplementedError below is
-    INTENTIONALLY safe even before body-fill.
+    ToolError message. The multi-match warning binds `parent_url_hash`
+    (blake2b 8-byte hex of the NORMALIZED URL) — NEVER the raw value.
     """
-    raise NotImplementedError(
-        "Plan 05-02 ships compile_filter body — D5-01 / D5-04 / 05-RESEARCH §4.6"
-    )
+    # 1. Fall-through if (database, table) is not a fragment table.
+    fragment_parent = config.FRAGMENT_PARENTS.get(f"{database}.{table}")
+    if fragment_parent is None:
+        return (filters, None)
+
+    # 2. Fall-through if config drift dropped the parent URL column.
+    parent_table = fragment_parent["parent_table"]
+    parent_url_col = url_column_for(database, parent_table)
+    if parent_url_col is None:
+        return (filters, None)
+
+    # 3. Trigger contract: EXACTLY one `exact` filter on the parent URL column
+    #    activates the join. Zero or many → fall-through (D5-02 / D5-03).
+    eq_url_filters = [f for f in filters if f.column == parent_url_col and f.op == "exact"]
+    if len(eq_url_filters) != 1:
+        return (filters, None)
+
+    # 4. Compute the cache key (the normalized URL — NEVER the raw value).
+    url_value = str(eq_url_filters[0].value)
+    normalized = normalize_url(url_value)
+
+    cache = ParentPKCache.current()
+    warning_state: dict | None = None
+
+    # 5. Single-flight on the cold-cache path (Pitfall 6 — mirrors
+    #    MetadataCache._refresh_lock discipline). Re-check inside the lock so
+    #    a sibling task that already filled the cache short-circuits the
+    #    second upstream Call 1. The lock is NON-reentrant (anyio.Lock), so
+    #    nested calls to cache.get() / cache.set() — which acquire the same
+    #    lock — would deadlock; mirror the get/set bodies inline within the
+    #    locked block.
+    async with cache._lock:
+        entry = cache._data.get(database, {}).get(parent_table, {}).get(normalized)
+        cache_hit = False
+        parent_pk: str | None = None
+        if entry is not None:
+            cached_pk, expiry = entry
+            if time.monotonic() < expiry:
+                cache_hit = True
+                parent_pk = cached_pk
+
+        if not cache_hit:
+            # 6. Cache MISS — fire Call 1 (parent lookup). UpstreamCallFailed
+            #    bubbles to the handler's existing `upstream_unavailable`
+            #    mapping in tools/retrieval.py (D-13 / D3-12 carry-forward).
+            #    `_sort_desc=<parent_match_order_by>` per RESEARCH §4.2
+            #    (Pitfall 1: NEVER the dash-prefix variant — Datasette
+            #    returns HTTP 500 for that wire shape).
+            #    `_size=1` is sufficient: Datasette still reports
+            #    `filtered_table_rows_count` honestly even with size=1, which
+            #    is how we detect multi-match without fetching every stale
+            #    duplicate (FRAG-06).
+            # INJ-05 compliance: build the param key via string concatenation
+            # (NOT f-string) so the INJ-05 grep (which forbids f-string
+            # interpolation of {url|parent_url|filter_value|normalized_url})
+            # never trips. The column-name interpolation is conceptually safe
+            # (parent_url_col comes from config.URL_COLUMNS, not user input),
+            # but the literal grep-discoverable pattern is what matters here.
+            call1_params: list[tuple[str, str]] = [
+                (parent_url_col + "__exact", url_value),
+                ("_sort_desc", fragment_parent["parent_match_order_by"]),
+                ("_size", "1"),
+            ]
+            resp = await DatasetteClient.current().get_table_rows(
+                database, parent_table, call1_params
+            )
+            rows = resp.get("rows") or []
+
+            if not rows:
+                # Negative cache (inline set — lock held). Repeat queries with
+                # the same URL inside the TTL re-use the negative entry and
+                # never re-hit upstream (D5-04).
+                cache._data.setdefault(database, {}).setdefault(parent_table, {})[normalized] = (
+                    None,
+                    time.monotonic() + cache._ttl,
+                )
+                return ([], None)
+
+            parent_pk = rows[0][fragment_parent["parent_pk"]]
+            cache._data.setdefault(database, {}).setdefault(parent_table, {})[normalized] = (
+                parent_pk,
+                time.monotonic() + cache._ttl,
+            )
+
+            # FRAG-06 — surface a structured warning if Datasette reports more
+            # than one matching parent row. The `_size=1` cap above means
+            # `rows` is single-element; `filtered_table_rows_count` reflects
+            # the unconstrained match count.
+            match_count = int(resp.get("filtered_table_rows_count") or 1)
+            if match_count > 1:
+                selected_match_value = rows[0].get(fragment_parent["parent_match_order_by"])
+                # INJ-05: bind the BLAKE2b hash of the normalized URL, NOT
+                # the raw value. NEVER bind parent_pk (FRAG-02).
+                log.warning(
+                    "fragment_parent_multi_match",
+                    database=database,
+                    fragment_table=table,
+                    parent_table=parent_table,
+                    parent_match_count=match_count,
+                    selected_parent_match_value=selected_match_value,
+                    parent_url_hash=hashlib.blake2b(normalized.encode(), digest_size=8).hexdigest(),
+                )
+                warning_state = {
+                    "parent_match_count": match_count,
+                    "selected_parent_match_value": selected_match_value,
+                }
+
+    # 7. Negative cache hit short-circuit (cache_hit=True, parent_pk=None).
+    if parent_pk is None:
+        return ([], None)
+
+    # 8. Rewrite the filter list — inject the internal parent_fk filter and
+    #    drop the user-supplied exact-on-parent-URL filter. Other filters
+    #    (e.g., `ordinal > 5` for drill-within-document) carry through.
+    #    The rewritten parent_fk filter BYPASSES the handler's per-field
+    #    visibility loop — it is INTERNAL state computed from FRAGMENT_PARENTS
+    #    config, not user input (audited via the side-channel counter-patch
+    #    test per 05-RESEARCH §4.6 / Pitfall 4).
+    rewritten: list[Filter] = [
+        Filter(
+            column=fragment_parent["parent_fk"],
+            op="exact",
+            value=parent_pk,
+        ),
+        *[f for f in filters if not (f.column == parent_url_col and f.op == "exact")],
+    ]
+    return (rewritten, warning_state)

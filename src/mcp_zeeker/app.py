@@ -68,19 +68,23 @@ async def lifespan(app: Starlette):
             # Envelope not available (wave-2 stub not yet merged) — tolerate
             pass
 
-        # Bind MetadataCache and DatasetteClient into their respective contextvars.
-        # Both use the same httpx.AsyncClient (D2-06: MetadataCache lifecycle owned by lifespan).
-        # Reset order is reverse of bind order (LIFO).
+        # Bind MetadataCache, DatasetteClient, and ParentPKCache into their
+        # respective contextvars. All three are process-local singletons (single
+        # Uvicorn worker per CFG / RATE-06 / NFR-04). Reset order is reverse of
+        # bind order (LIFO).
         from mcp_zeeker.core.datasette_client import DatasetteClient
+        from mcp_zeeker.core.fragment_join import ParentPKCache
         from mcp_zeeker.core.metadata_cache import MetadataCache
 
         mc = MetadataCache(http_client, config.UPSTREAM_URL, ttl=config.METADATA_TTL_SECONDS)
         mc_token = MetadataCache.bind(mc)
         token = DatasetteClient.bind(DatasetteClient(http_client))
+        pk_token = ParentPKCache.bind(ParentPKCache())
         try:
             async with mcp_app.lifespan(mcp_app):  # MUST be nested (Pitfall 1)
                 yield
         finally:
+            ParentPKCache.reset(pk_token)
             DatasetteClient.reset(token)
             MetadataCache.reset(mc_token)
 

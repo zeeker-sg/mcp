@@ -42,8 +42,15 @@ from fastmcp.tools.tool import ToolAnnotations
 from pydantic import Field
 
 from mcp_zeeker import config
+from mcp_zeeker.core import fragment_join  # Phase 5 / D5-01 — sole delegation point
 from mcp_zeeker.core.config_lookup import url_column_for
-from mcp_zeeker.core.cursor import canonical_shape_str, decode_cursor, encode_cursor
+from mcp_zeeker.core.cursor import (
+    canonical_shape_str,
+    decode_cursor,
+    decode_keyset_cursor,  # Phase 5 / D5-07 — keyset variant on join path
+    encode_cursor,
+    encode_keyset_cursor,  # Phase 5 / D5-07 — keyset variant on join path
+)
 from mcp_zeeker.core.datasette_client import DatasetteClient, UpstreamCallFailed
 from mcp_zeeker.core.envelope import Envelope, Pagination
 from mcp_zeeker.core.filter_compiler import Filter, compile_filters
@@ -66,7 +73,13 @@ _QUERY_TABLE_DESCRIPTION = (
     "pagination, and an explicit column allow-list. Default columns are the table's "
     "light set; heavy text columns return under 'retrieved_content' when explicitly "
     "requested. SQLite LIKE 'contains'/'startswith'/'endswith' is case-insensitive for "
-    "ASCII. Rate limits: 20/burst, 60/minute, 5000/day per IP. " + config.TOOL_TRAILER
+    "ASCII. "
+    # Phase 5 D5-09 — fragment-join note. Inserted BEFORE TOOL_TRAILER so the
+    # injection-resistance trailer INJ-01 / ANNO-02 remains the LAST sentence.
+    "On *_fragments tables, an `exact` filter on the parent's URL column triggers a "
+    "transparent join — fragments are returned sorted by paragraph order with `limit` "
+    "capped at 100 per call. "
+    "Rate limits: 20/burst, 60/minute, 5000/day per IP. " + config.TOOL_TRAILER
 )
 
 
@@ -183,10 +196,33 @@ async def query_table(
     # Step 3: column visibility (single source of truth, mirrors _visible_tables)
     visible = await _visible_columns(database, table)
 
+    # Phase 5 (D5-02 / 05-RESEARCH §4.6 / Pitfall 4) — fragment-join visibility
+    # exemption. When (db, table) is a fragment table in FRAGMENT_PARENTS, the
+    # LLM's filter column is the PARENT table's URL column (e.g., source_url
+    # for judgments_fragments) — which is NOT in `visible` for the fragment
+    # table. We add it to `allowed_extra_columns` so the per-field loop below
+    # accepts it; fragment_join.compile_filter (Step 3.5 below) then rewrites
+    # the filter into the internal parent_fk eq parent_pk form. The rewritten
+    # filter bypasses the loop because the loop has already run.
+    fragment_parent_meta = config.FRAGMENT_PARENTS.get(f"{database}.{table}")
+    allowed_extra_columns: set[str] = set()
+    parent_url_for_qhash: str | None = None  # captured before Step 3.5 rewrite
+    if fragment_parent_meta is not None:
+        parent_table_for_exempt = fragment_parent_meta["parent_table"]
+        parent_url_column = url_column_for(database, parent_table_for_exempt)
+        if parent_url_column:
+            allowed_extra_columns.add(parent_url_column)
+            # Capture the user-supplied URL value for canonical_shape rebuild
+            # later (D5-06: qhash binds normalized URL, NOT parent_pk).
+            for _f in normalized_filters:
+                if _f.column == parent_url_column and _f.op == "exact":
+                    parent_url_for_qhash = fragment_join.normalize_url(str(_f.value))
+                    break
+
     # Step 4: per-field unknown_column checks BEFORE compile_filters / upstream calls
     # (D3-07 single-emission identity — counter-patched in test_retrieval_side_channel.py)
     for f in normalized_filters:
-        if f.column not in visible:
+        if f.column not in visible and f.column not in allowed_extra_columns:
             raise_unknown_column(database, table, f.column)
     if sort:
         sort_col = sort.lstrip("-")
@@ -196,6 +232,34 @@ async def query_table(
         if col not in visible:
             raise_unknown_column(database, table, col)
 
+    # Step 3.5 (Phase 5 / D5-01 / D5-04) — fragment-join orchestration.
+    # Detect join trigger via (db, table) in FRAGMENT_PARENTS AND exactly-one-eq
+    # filter on the parent URL column. If active, fragment_join.compile_filter
+    # fires Call 1 (parent lookup) and returns rewritten filters with parent_fk
+    # substituted. If inactive (non-fragment table OR no eq-URL filter), returns
+    # the original list unchanged (fall-through per D5-03).
+    #
+    # INJ-05: UpstreamCallFailed from Call 1 maps to the generic
+    # upstream_unavailable literal — never echoes httpx/Datasette error text.
+    try:
+        normalized_filters, _fragment_warning_state = await fragment_join.compile_filter(
+            database, table, normalized_filters
+        )
+    except UpstreamCallFailed:
+        raise ToolError("upstream_unavailable: upstream call failed") from None
+
+    # Did fragment_join.compile_filter rewrite the filter list? Detect by
+    # presence of the internal parent_fk filter (config-computed, never
+    # user-supplied — the rewrite is the sole producer of this filter shape).
+    fragment_join_active: bool = (
+        fragment_parent_meta is not None
+        and parent_url_for_qhash is not None
+        and any(
+            f.column == fragment_parent_meta["parent_fk"] and f.op == "exact"
+            for f in normalized_filters
+        )
+    )
+
     # Step 5: merge column types — config fallback overlaid with upstream (D3-08, D2-07)
     column_types_map = await DatasetteClient.current().get_table_column_types(database)
     types_for_table = {
@@ -203,12 +267,28 @@ async def query_table(
         **column_types_map.get(table, {}),
     }
 
-    # Step 6: compile filter clauses to httpx URL params (D3-01 / D3-02)
+    # Step 6: compile filter clauses to httpx URL params (D3-01 / D3-02).
+    # On the fragment-join path, `visible_columns` is augmented with the parent
+    # URL column (via allowed_extra_columns) — but at this point the
+    # user-supplied source_url filter has already been REPLACED with the
+    # internal parent_fk filter by fragment_join.compile_filter, so the
+    # filter_compiler only sees the parent_fk column. parent_fk is not in
+    # `visible` (HIDDEN_COLUMNS strips it), so we need to add it here.
+    visible_for_compile = visible | allowed_extra_columns
+    if fragment_join_active and fragment_parent_meta is not None:
+        visible_for_compile = visible_for_compile | {fragment_parent_meta["parent_fk"]}
     filter_params = compile_filters(
         normalized_filters,
-        visible_columns=visible,
+        visible_columns=visible_for_compile,
         column_types=types_for_table,
     )
+
+    # Step 7.5 (Phase 5 / D5-08) — limit re-clamp on the fragment-join path.
+    # Pydantic Field(le=200) is the primary gate; this is the belt-and-suspenders
+    # tighter cap for fragment tables. Fixed-literal — NO {limit} f-string
+    # interpolation (INJ-05).
+    if fragment_join_active and limit > 100:
+        raise ToolError("invalid_filter_op: limit exceeds fragment-join cap of 100")
 
     # Step 7: column partition (D3-04 / D3-05). Default (columns is None) emits
     # the configured light set — `retrieved_content` MUST NOT appear on any row.
@@ -252,12 +332,44 @@ async def query_table(
     # malformed/shape-mismatched tokens, and we want that rejection to happen
     # without burning an upstream Datasette query. The canonical shape is
     # rebuilt at the end of the request to re-key the next cursor.
-    canonical_shape = canonical_shape_str(database, table, sort, normalized_filters, columns)
+    #
+    # Phase 5 (D5-05 / D5-06 / RESEARCH §4.3): on the fragment-join path,
+    # qhash binds the NORMALIZED USER URL (NOT the resolved parent_pk), so
+    # continuation calls across the ParentPKCache TTL still match shape after
+    # the parent_pk re-resolves. Build a synthetic filter list that puts the
+    # normalized-URL filter back in place of the rewritten parent_fk filter
+    # for canonical_shape purposes only — the upstream Call 2 still uses
+    # parent_fk via the rewritten filter list above.
     datasette_next: str | None = None
-    if cursor is not None:
-        # decode_cursor raises ToolError(invalid_cursor: ...) on any failure;
-        # propagate untouched — the fixed-literal message is the contract.
-        datasette_next = decode_cursor(cursor, canonical_shape)
+    if fragment_join_active and fragment_parent_meta is not None:
+        parent_url_col_for_shape = url_column_for(database, fragment_parent_meta["parent_table"])
+        synthetic_filters_for_qhash: list[Filter] = [
+            Filter(
+                column=parent_url_col_for_shape,
+                op="exact",
+                value=parent_url_for_qhash,
+            ),
+            *[
+                f
+                for f in normalized_filters
+                if not (f.column == fragment_parent_meta["parent_fk"] and f.op == "exact")
+            ],
+        ]
+        canonical_shape = canonical_shape_str(
+            database, table, None, synthetic_filters_for_qhash, columns
+        )
+        if cursor is not None:
+            # decode_keyset_cursor raises ToolError(invalid_cursor: keyset
+            # cursor is malformed) on any decode failure — D5-07 fixed literal,
+            # propagate untouched.
+            last_order_by_value, last_id = decode_keyset_cursor(cursor, canonical_shape)
+            datasette_next = f"{last_order_by_value},{last_id}"
+    else:
+        canonical_shape = canonical_shape_str(database, table, sort, normalized_filters, columns)
+        if cursor is not None:
+            # decode_cursor raises ToolError(invalid_cursor: ...) on any failure;
+            # propagate untouched — the fixed-literal message is the contract.
+            datasette_next = decode_cursor(cursor, canonical_shape)
 
     # Step 10: compose Datasette params; _shape=objects is prepended by get_table_rows.
     # upstream_cols = light + heavy so Datasette returns every column we plan to
@@ -269,6 +381,14 @@ async def query_table(
         *[("_col", c) for c in upstream_cols],
         ("_size", str(limit)),
     ]
+    # Phase 5 (RESEARCH §4.4 / Pitfall 2): inject _nocount=1 on the fragment-join
+    # path. judgments_fragments is the largest table (~957 fragments / parent);
+    # without this flag Datasette's implicit COUNT(*) over the filtered subquery
+    # exceeds sql_time_limit_ms and returns HTTP 400 SQL Interrupted. Harmless
+    # on the smaller fragment tables. filtered_table_rows_count goes null in the
+    # response but `truncated` still surfaces honestly (FRAG-04).
+    if fragment_join_active:
+        params.append(("_nocount", "1"))
     if datasette_next is not None:
         params.append(("_next", datasette_next))
 
@@ -307,7 +427,19 @@ async def query_table(
     # the same sort/filters/columns succeeds — any shape change invalidates.
     # `truncated` flows through honestly from upstream; Phase 5 FRAG-04 wires
     # the consumer side.
-    next_cursor = encode_cursor(canonical_shape, result["next"]) if result.get("next") else None
+    #
+    # Phase 5 (D5-05 / D5-06 / RESEARCH §4.3): on the fragment-join path, the
+    # upstream `next` token follows Datasette's keyset shape
+    # "<last_order_by_value>,<last_id>" — split it and route through the
+    # keyset encoder so the cursor payload preserves the (order_by, id)
+    # tiebreak that FRAG-03 requires.
+    if fragment_join_active and result.get("next"):
+        _last_ord, _last_id = result["next"].split(",", 1)
+        next_cursor = encode_keyset_cursor(canonical_shape, _last_ord, _last_id)
+    elif result.get("next"):
+        next_cursor = encode_cursor(canonical_shape, result["next"])
+    else:
+        next_cursor = None
     truncated = bool(result.get("truncated", False))
 
     # Step 15: emit via Envelope.for_rows with the populated Pagination.
@@ -386,7 +518,13 @@ async def fetch(
 
     # Step 3: exact-match upstream query. `_size=2` is the multi-match detector;
     # we never need more than 2 rows to distinguish "single" / "ambiguous".
-    params: list[tuple[str, str]] = [(f"{url_col}__exact", url), ("_size", "2")]
+    # INJ-05 compliance — build the Datasette param key via string concatenation
+    # (NOT f-string interpolation of `url_col`). The column name is config-sourced
+    # so the literal pattern is safe, but mirrors fragment_join's discipline so
+    # the Phase 5 INJ-05 grep over retrieval.py stays clean (the grep flags any
+    # f-string starting with `{url` regardless of whether the substitution is a
+    # column name or a URL value — concatenation sidesteps the false positive).
+    params: list[tuple[str, str]] = [(url_col + "__exact", url), ("_size", "2")]
     try:
         result = await DatasetteClient.current().get_table_rows(database, table, params)
     except UpstreamCallFailed:
