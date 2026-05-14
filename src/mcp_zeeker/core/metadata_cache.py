@@ -44,9 +44,9 @@ class MetadataCache:
         self._http = http
         self._upstream_url = upstream_url
         self._ttl = ttl
-        self._data: dict | None = None          # normalized dict, lowercase DB keys (D2-05)
+        self._data: dict | None = None  # normalized dict, lowercase DB keys (D2-05)
         self._last_fetch: float = 0.0
-        self._refresh_lock = anyio.Lock()       # MUST be inside __init__ (Pitfall 3 — event loop)
+        self._refresh_lock = anyio.Lock()  # MUST be inside __init__ (Pitfall 3 — event loop)
 
     @classmethod
     def current(cls) -> MetadataCache:
@@ -92,7 +92,7 @@ class MetadataCache:
         raw = resp.json()
         normalized = {}
         for db_name, db_data in raw.get("databases", {}).items():
-            normalized[db_name.lower()] = db_data   # D2-05: normalize at ingest
+            normalized[db_name.lower()] = db_data  # D2-05: normalize at ingest
         return normalized
 
     async def _ensure_fresh(self) -> None:
@@ -150,9 +150,7 @@ class MetadataCache:
             log.info("metadata_gap", database=database, table=table)
         return table_data
 
-    async def get_column_description(
-        self, database: str, table: str, column: str
-    ) -> str | None:
+    async def get_column_description(self, database: str, table: str, column: str) -> str | None:
         """Return column description string from upstream metadata, or None.
 
         D2-05: delegates to get_table_metadata (normalized store; no case folding here).
@@ -182,3 +180,49 @@ class MetadataCache:
         """Force cache expiry and re-fetch. Test seam and manual refresh path."""
         self._last_fetch = 0.0
         await self._ensure_fresh()
+
+    async def license_for(self, database: str) -> tuple[str, str]:
+        """Return (license_text, license_url) for `database` (D6-01 / D6-04).
+
+        D6-04 fallback chain:
+          1. Upstream `/-/metadata.json` non-empty `(license, license_url)` wins.
+          2. Otherwise `config.LICENSES.get(database, ("", ""))`.
+          3. Cold-cache / unknown DB → `("", "")` (no exception, no upstream
+             error surfacing — provenance shipping with empty strings is the
+             acceptable degraded mode).
+
+        D2-05: database key read directly from self._data (normalized at ingest;
+        no .lower() at this lookup boundary — Pitfall 2).
+        """
+        from mcp_zeeker import config
+
+        await self._ensure_fresh()
+        if self._data is not None:
+            db_data = self._data.get(database, {})
+            lic = db_data.get("license") or ""
+            lurl = db_data.get("license_url") or ""
+            if lic or lurl:
+                return (lic, lurl)
+        return config.LICENSES.get(database, ("", ""))
+
+    def license_for_sync(self, database: str) -> tuple[str, str]:
+        """Synchronous license accessor for envelope factories (D6-04).
+
+        Mirrors `license_for` but cannot await. Cold-cache acceptance per D6-04:
+        returns `("", "")` when `_data is None` (no upstream hit yet). Once the
+        async path warms `_data`, this sync accessor reads the same underlying
+        dict.
+
+        Plan 06-02 wires this into `Envelope.for_table_list` / `for_rows` because
+        those factories run inside Pydantic constructor scope and cannot await.
+        """
+        from mcp_zeeker import config
+
+        if self._data is None:
+            return ("", "")
+        db_data = self._data.get(database, {})
+        lic = db_data.get("license") or ""
+        lurl = db_data.get("license_url") or ""
+        if lic or lurl:
+            return (lic, lurl)
+        return config.LICENSES.get(database, ("", ""))

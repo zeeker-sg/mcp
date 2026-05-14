@@ -399,3 +399,36 @@ def stub_fragment_join_two_step(
     )
     httpx_mock.add_response(url=parent_url_re, json=parent_lookup_payload)
     httpx_mock.add_response(url=fragments_url_re, json=fragments_payload)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Envelope hardening fixtures (single-plan-touch rule per 02-LEARNINGS)
+# ---------------------------------------------------------------------------
+# All Phase 6 conftest additions live in Plan 06-01 ONLY. Plans 06-02 / 06-03
+# MUST NOT modify this file. The cross-plan merge-conflict learning from
+# Phase 2 / 3 / 4 / 5 dictates consolidation: any helper Wave 2 or Wave 3
+# needs is pre-included here. Phase 6 needs exactly one new fixture:
+# frozen_retrieved_at, which binds tool_started_at to a fixed instant.
+
+
+@pytest.fixture
+def frozen_retrieved_at():
+    """D6-12: Bind tool_started_at to a fixed instant for deterministic snapshots.
+
+    Yields the bound datetime so tests can assert on both the contextvar
+    binding and the literal ISO string '2026-01-01T00:00:00+00:00'.
+
+    Plan 06-02 / 06-03 consume this fixture in envelope snapshot, citation
+    synthesis, content policy emission, and consolidated hostile-input tests.
+    """
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from mcp_zeeker.core.middleware.retrieved_at import tool_started_at
+
+    frozen = _dt(2026, 1, 1, tzinfo=UTC)
+    token = tool_started_at.set(frozen)
+    try:
+        yield frozen
+    finally:
+        tool_started_at.reset(token)

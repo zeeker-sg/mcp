@@ -17,7 +17,12 @@ from mcp_zeeker import config
 
 
 class Provenance(BaseModel):
-    """Citation-ready provenance block attached to every response (PRD §8)."""
+    """Citation-ready provenance block attached to every response (PRD §8).
+
+    Phase 6 D6-02: adds `license_url` (optional, defaults to None for back-compat
+    with existing Phase 1-5 construction sites). Plan 06-02 wires the field in
+    every envelope factory by reading MetadataCache.license_for_sync().
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -26,6 +31,7 @@ class Provenance(BaseModel):
     table: str | None  # D-07: nullable for list_databases
     retrieved_at: datetime  # D-09: UTC, serialised as ISO 8601 by Pydantic JSON mode
     license: str
+    license_url: str | None = None  # D6-02: per-row license URL; back-compat default None
     attribution: str
 
 
@@ -93,11 +99,14 @@ class Envelope(BaseModel):
 
         D2-06: provenance scoped to a single database; table is None because
         this response spans all visible tables in the DB.
-        License: config.LICENSES.get(database, "") — empty string in Phase 1;
-        Phase 6 ENV-03 will wire MetadataCache-driven license strings.
-        Open Q3 (RESEARCH): license value will be wired from MetadataCache in Phase 6.
+        License: extracted from config.LICENSES tuple shape — Phase 6 D6-02
+        reshaped LICENSES to dict[str, tuple[str, str]]. Plan 06-02 rewires the
+        factory body to read MetadataCache.license_for_sync() (which returns the
+        same (text, url) tuple but with upstream-priority); for Plan 06-01 we
+        compatibility-extract the tuple's first element.
         D-09: retrieved_at is wallclock UTC at call time.
         """
+        _license_tuple = config.LICENSES.get(database, ("", ""))
         return cls(
             data=rows,
             provenance=Provenance(
@@ -105,7 +114,7 @@ class Envelope(BaseModel):
                 database=database,
                 table=None,
                 retrieved_at=datetime.now(tz=UTC),
-                license=config.LICENSES.get(database, ""),
+                license=_license_tuple[0],
                 attribution=config.DEFAULT_ATTRIBUTION,
             ),
         )
@@ -124,8 +133,12 @@ class Envelope(BaseModel):
 
         Provides a stable signature so future-phase handlers compile without
         revisiting envelope code. Phase 1 ignores the citation parameter.
+        Phase 6 D6-02 reshaped LICENSES to dict[str, tuple[str, str]]; this
+        factory body compatibility-extracts the first element. Plan 06-02
+        rewires to MetadataCache.license_for_sync().
         D-09: retrieved_at is wallclock UTC at call time.
         """
+        _license_tuple = config.LICENSES.get(database, ("", ""))
         return cls(
             data=rows,
             provenance=Provenance(
@@ -133,7 +146,7 @@ class Envelope(BaseModel):
                 database=database,
                 table=table,
                 retrieved_at=datetime.now(tz=UTC),
-                license=config.LICENSES.get(database, ""),
+                license=_license_tuple[0],
                 attribution=config.DEFAULT_ATTRIBUTION,
             ),
             pagination=pagination,

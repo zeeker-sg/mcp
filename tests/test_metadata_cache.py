@@ -25,9 +25,7 @@ from mcp_zeeker.core.metadata_cache import MetadataCache
 METADATA_STUB = {
     "databases": {
         "Zeeker-Judgements": {
-            "tables": {
-                "judgments": {"description": "Singapore court judgments"}
-            }
+            "tables": {"judgments": {"description": "Singapore court judgments"}}
         },
         "sg-gov-newsrooms": {
             "license": "CC-BY-4.0",
@@ -162,6 +160,87 @@ async def test_get_database_license_returns_none_when_absent(bound_cache):
     """get_database_license returns None when license key missing (D2-03)."""
     result = await bound_cache.get_database_license("zeeker-judgements")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — license_for / license_for_sync coverage (D6-01 / D6-04)
+# ---------------------------------------------------------------------------
+
+
+async def test_license_for_returns_upstream_value(httpx_mock: pytest_httpx.HTTPXMock):
+    """D6-04 step 1: upstream non-empty `(license, license_url)` wins.
+
+    Also exercises D2-05 mixed-case lookup: the upstream stub key is
+    `Zeeker-Judgements`; the lookup key is `zeeker-judgements` (lowercased).
+    """
+    stub = {
+        "databases": {
+            "Zeeker-Judgements": {
+                "license": "All rights reserved",
+                "license_url": "https://example.test/tos",
+                "tables": {"judgments": {"description": "Singapore court judgments"}},
+            },
+        }
+    }
+    httpx_mock.add_response(
+        url=f"{config.UPSTREAM_URL}/-/metadata.json",
+        json=stub,
+        is_reusable=True,
+    )
+    http = httpx.AsyncClient(base_url=config.UPSTREAM_URL)
+    cache = MetadataCache(http, config.UPSTREAM_URL, ttl=0)
+    token = MetadataCache.bind(cache)
+    try:
+        result = await MetadataCache.current().license_for("zeeker-judgements")
+        assert result == ("All rights reserved", "https://example.test/tos")
+    finally:
+        MetadataCache.reset(token)
+        MetadataCache.clear_singleton()
+        await http.aclose()
+
+
+async def test_license_for_falls_back_to_config(bound_cache):
+    """D6-04 step 2: upstream license absent → config.LICENSES tuple wins.
+
+    METADATA_STUB has no `license` field on `Zeeker-Judgements`, so the D6-04
+    fallback chain steps from upstream → config.LICENSES (which seeds
+    `("CC-BY-4.0", LICENSE_DEFAULT_URL)` for every ALLOWED_DATABASES entry).
+    """
+    result = await MetadataCache.current().license_for("zeeker-judgements")
+    assert result == ("CC-BY-4.0", "https://creativecommons.org/licenses/by/4.0/")
+
+
+async def test_license_for_falls_back_to_empty_when_unknown_db(bound_cache):
+    """D6-04 step 3: unknown DB → ('', '') — no exception, no upstream_unavailable."""
+    result = await MetadataCache.current().license_for("not-a-real-db")
+    assert result == ("", "")
+
+
+def test_license_for_sync_cold_cache_returns_empty():
+    """D6-04 cold-cache acceptance: license_for_sync returns ('', '') without await."""
+    http = httpx.AsyncClient(base_url=config.UPSTREAM_URL)
+    mc = MetadataCache(http, config.UPSTREAM_URL, ttl=0)
+    # No _ensure_fresh call — _data is None
+    assert mc._data is None
+    assert mc.license_for_sync("zeeker-judgements") == ("", "")
+
+
+async def test_license_for_sync_warm_cache_returns_upstream(bound_cache):
+    """license_for_sync reads the same underlying dict as license_for after warm-up.
+
+    After any call that populates _data (here, a license_for call), the sync
+    accessor sees the config-fallback tuple because METADATA_STUB has no
+    license fields under the Zeeker-Judgements entry.
+    """
+    mc = MetadataCache.current()
+    # Warm the cache via the async accessor
+    _ = await mc.license_for("zeeker-judgements")
+    assert mc._data is not None
+    # Sync accessor returns the same fallback tuple (D6-04 step 2)
+    assert mc.license_for_sync("zeeker-judgements") == (
+        "CC-BY-4.0",
+        "https://creativecommons.org/licenses/by/4.0/",
+    )
 
 
 @pytest.mark.live
