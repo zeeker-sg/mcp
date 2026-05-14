@@ -22,7 +22,23 @@ from pydantic import BaseModel, ConfigDict
 
 
 class UpstreamCallFailed(Exception):
-    """Raised when the upstream Datasette request fails after retry policy."""
+    """Raised when the upstream Datasette request fails after retry policy.
+
+    Phase 4 (D4-09 / 04-RESEARCH §3.7 / Pitfall 5): exposes the HTTP status
+    code when known so the search orchestrator can distinguish per-table FTS5
+    syntax errors (status 400 — mapped to `invalid_query` when ALL tables
+    fail) from generic upstream unavailability (status 5xx or transport
+    failure — mapped to `upstream_unavailable`).
+
+    Existing raise sites that don't pass `status=` (transport errors at the
+    httpx.RequestError boundary and the retry-exhausted post-loop raise) keep
+    `status=None` via the default — backward-compatible with Phase 1/2/3 callers
+    that read the exception via `str(exc)` only.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class TableSummary(BaseModel):
@@ -35,6 +51,15 @@ class TableSummary(BaseModel):
     count: int | None = None
     columns: list[str] = []
     primary_keys: list[str] = []
+    # Phase 4 (D4-02 / 04-RESEARCH §3.1 / Pitfall 1 / Pitfall 3): FTS5 virtual
+    # table name when upstream has built an FTS index for this table's content;
+    # None otherwise. core.search.searchable_tables_for uses
+    # `fts_table is not None` as the LOAD-BEARING safety gate — Datasette
+    # silently ignores `_search=` on non-FTS tables and would return
+    # rowid-ordered rows as fake "search results" without this gate.
+    # Default None preserves backward compat with Phase 2 fixtures that don't
+    # set the key (Pydantic extra="ignore" tolerates missing fields per D-13).
+    fts_table: str | None = None
 
 
 class DatabaseSummary(BaseModel):
@@ -117,10 +142,19 @@ class DatasetteClient:
                 await asyncio.sleep(0.25 + random.random() * 0.25)
                 continue
             if resp.status_code == 504:
-                raise UpstreamCallFailed(f"upstream 504 on {url}")
+                # D4-09 / 04-RESEARCH §3.7: pass status so the search
+                # orchestrator can distinguish 5xx (upstream_unavailable)
+                # from 400 (per-table FTS5 syntax error → invalid_query when
+                # all tables fail).
+                raise UpstreamCallFailed(f"upstream 504 on {url}", status=504)
             if 200 <= resp.status_code < 300:
                 return resp
-            raise UpstreamCallFailed(f"upstream {resp.status_code} on {url}")
+            # D4-09 / 04-RESEARCH §3.7: same — pass through resp.status_code.
+            # The transport-error raise (httpx.RequestError above) keeps
+            # status=None via default since no HTTP response was parsed.
+            raise UpstreamCallFailed(
+                f"upstream {resp.status_code} on {url}", status=resp.status_code
+            )
         raise UpstreamCallFailed(f"upstream retry exhausted on {url}")
 
     async def get_database(self, name: str) -> DatabaseSummary:

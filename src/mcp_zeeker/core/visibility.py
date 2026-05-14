@@ -84,6 +84,30 @@ def raise_not_found(database: str, table: str) -> NoReturn:
     raise ToolError(f"not_found: No row found in {database}.{table} for the given URL")
 
 
+def raise_invalid_query() -> NoReturn:
+    """Single emission point for invalid_query errors (D4-09, SEARCH-06, INJ-05).
+
+    Triggered by THREE handler paths in Phase 4 search:
+      (a) Empty or whitespace-only query (D4-19 step 1 — gate fires BEFORE
+          escape_fts5; empty string would otherwise produce an FTS5 syntax
+          error upstream).
+      (b) Limit out-of-range from a direct caller bypassing the Pydantic
+          Field(ge=1, le=100) clamp (D4-11 belt-and-suspenders).
+      (c) All per-table fan-out tasks failed with upstream HTTP 400 — every
+          target table returned an FTS5 syntax error (defensive, 04-RESEARCH
+          §3.7). The orchestrator uses UpstreamCallFailed.status to detect this
+          case and the handler maps it through this helper.
+
+    INJ-05 / D3-09 / D4-07 / 04-RESEARCH §3.3 (Pitfall 5): the message is a
+    FIXED literal. The user query string is NEVER interpolated, f-string'd,
+    or otherwise echoed. Locked-catalog discipline mirrors filter_compiler's
+    `invalid_filter_op:` fixed-literal pattern (T-03-01 / WR-02). The locked
+    Phase 4 search-error catalog has exactly one search code (`invalid_query`)
+    alongside the 6 retrieval codes — see PRD §12 / D3-12 / WR-02.
+    """
+    raise ToolError("invalid_query: query syntax not supported")
+
+
 # ---------------------------------------------------------------------------
 # Table-level visibility (Phase 2 extract from tools/discovery.py)
 # ---------------------------------------------------------------------------

@@ -276,3 +276,33 @@ HEAVY_COLUMNS: frozenset[str] = frozenset(
         "text",
     }
 )
+
+# ---------------------------------------------------------------------------
+# Phase 4 — cross-database search (D4-02 / D4-04 / D4-12 / D4-22, CFG-01/02)
+# ---------------------------------------------------------------------------
+
+# D4-04: tables whose name ends with any of these patterns are excluded from
+# search discovery (suffix match). Currently denies *_fragments because those
+# tables are paragraph-level and break the preview-row contract; the agent
+# uses query_table on *_fragments via Phase 5's transparent join.
+SEARCH_DENYLIST_PATTERNS: tuple[str, ...] = ("_fragments",)
+
+# D4-12 / 04-RESEARCH §3.8: ordered candidate column names per preview field.
+# First match in the table's available columns wins (heavy columns filtered at
+# resolution time). Order = preference (specific first, generic last).
+# Auto-discovery resolves all 12 currently-searchable tables cleanly per the
+# §3.8 audit; add candidates here when a new upstream table introduces a
+# different convention.
+SEARCH_PREVIEW_DEFAULTS: dict[str, tuple[str, ...]] = {
+    "title": ("title", "case_name", "name", "heading"),
+    "date": ("decision_date", "published_date", "pub_date", "date"),
+    "summary": ("summary", "description", "abstract", "section"),
+    "url": ("source_url", "decision_url", "source_link", "link", "item_url", "url", "permalink"),
+}
+
+# D4-12 / D4-22: per-table overrides for tables that don't follow the defaults
+# above. Empty in v1 — 04-RESEARCH §3.8 confirmed all 12 currently-searchable
+# tables resolve cleanly via defaults. Format: {f"{db}.{table}": {field:
+# column_name | None}} — mirrors URL_COLUMNS flat-key style. `None` value
+# means "explicitly suppress this field" (emit the preview row's field as null).
+SEARCH_PREVIEW_OVERRIDES: dict[str, dict[str, str | None]] = {}

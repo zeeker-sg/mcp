@@ -46,6 +46,16 @@ class Pagination(BaseModel):
     next_cursor: str | None = None
     truncated: bool = False
 
+    # D4-17 (Phase 4): cross-DB search drill-down hint + failure count.
+    # `upstream_total_hits` is keyed `"<db>.<table>"` and populated from each
+    # per-table response's `filtered_table_rows_count`. Empty dict (not None)
+    # on non-search calls keeps the envelope schema stable — Pydantic 2 deep-
+    # copies the default per-instance so the mutable default is safe.
+    # `failed_tables` is the count of per-table fan-out tasks that raised
+    # UpstreamCallFailed (timeout / 5xx after retry / malformed JSON).
+    upstream_total_hits: dict[str, int] = {}
+    failed_tables: int = 0
+
 
 class Envelope(BaseModel):
     """Top-level response wrapper for every MCP tool call (PRD §8, ENV-06)."""
@@ -127,4 +137,45 @@ class Envelope(BaseModel):
                 attribution=config.DEFAULT_ATTRIBUTION,
             ),
             pagination=pagination,
+        )
+
+    @classmethod
+    def for_search_results(
+        cls,
+        *,
+        rows: list[dict],
+        upstream_total_hits: dict[str, int],
+        failed_tables: int = 0,
+    ) -> Envelope:
+        """Factory for cross-database search responses (D4-16, SEARCH-01..06).
+
+        Mirrors `for_database_list`'s multi-DB provenance shape — database=None,
+        table=None, license=LICENSE_MIXED — because the response spans multiple
+        databases, each potentially with a different per-DB license. Adds a
+        `Pagination` block carrying the per-(db.table) `upstream_total_hits`
+        drill-down hint (D4-17) and the count of per-table fan-out tasks that
+        failed (`failed_tables` — D4-17).
+
+        - rows: round-robin-merged preview rows (D4-05) already truncated to
+          the caller-provided `limit` inside fan_out_search.
+        - upstream_total_hits: per-(db.table) `filtered_table_rows_count`
+          surfaced from each per-table response so the LLM can decide whether
+          to narrow the query or paginate via query_table.
+        - failed_tables: count of per-table fan-out tasks that raised
+          UpstreamCallFailed after retry (default 0).
+        """
+        return cls(
+            data=rows,
+            provenance=Provenance(
+                source="data.zeeker.sg",
+                database=None,
+                table=None,
+                retrieved_at=datetime.now(tz=UTC),
+                license=config.LICENSE_MIXED,
+                attribution=config.DEFAULT_ATTRIBUTION,
+            ),
+            pagination=Pagination(
+                upstream_total_hits=upstream_total_hits,
+                failed_tables=failed_tables,
+            ),
         )
