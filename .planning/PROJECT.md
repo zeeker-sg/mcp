@@ -72,7 +72,7 @@ Every successful response is **citation-ready, scope-bounded, and safe to feed b
 | In-memory token bucket keyed by IP for v1 | Single-process anonymous tier — Redis/auth deferred behind a stable interface | — Pending (Phase 7) |
 | Streamable HTTP with SSE fallback | Aligns with current MCP transport spec | ✓ Phase 1 |
 | Labeling over lexical content filtering | Legal text legitimately contains adversarial-looking content; filtering would degrade utility | ✓ Phase 3 — INJ-01 TOOL_TRAILER live-visible in Claude Desktop |
-| Fragment-parent join hidden behind a URL filter | Caller never sees internal PKs/FKs; ergonomic and consistent with URL-as-key model | — Pending (Phase 5) |
+| Fragment-parent join hidden behind a URL filter | Caller never sees internal PKs/FKs; ergonomic and consistent with URL-as-key model | ✓ Phase 5 — `core/fragment_join.py::compile_filter` transparent two-step join; ParentPKCache 30-min TTL; keyset cursor with `(order_by, id)` tiebreak via Datasette `_next` token; multi-match resolved silently via per-table `parent_match_order_by` (created_at / last_scraped / imported_on) with `parent_url_hash` warning log; F-4 sign-off pending human walk |
 | **INJ-05**: User-supplied URL / filter value MUST NOT appear in any error body | Fixed-literal errors make value-echo regressions detectable by grep; tested live against three attack shapes | ✓ Phase 3 — wire-level confirmed via curl F-4 examples D + E (`example.com` / `NONEXISTENT_999` substrings absent) and Claude Desktop S5 + S6 transcripts |
 | **D3-12 LOCKED error catalog** (6 codes for query_table + fetch) | Stable codes for log/metrics consumers; new codes require explicit catalog update | ✓ Phase 3 — `unknown_table`, `unknown_column`, `invalid_filter_op`, `invalid_cursor`, `unsupported_table_for_fetch`, `not_found` |
 | **FETCH-04**: `unsupported_table_for_fetch` distinct from `unknown_table` | Presence side-channel deliberately exposes "this table exists but is not URL-keyed" — bounded by `_resolve_table` running first so hidden tables emit `unknown_table` | ✓ Phase 3 — accepted risk T-03-19 |
@@ -98,4 +98,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-14 after Phase 4 (cross-database-search)*
+*Last updated: 2026-05-14 after Phase 5 (transparent-fragment-parent-joins)*
