@@ -40,8 +40,14 @@ def _tables_payload_with_hidden(visible: list[str], hidden: list[str]) -> dict:
     visible: table names that should have hidden=False
     hidden: table names that should have hidden=True (upstream FTS/aux tables)
     """
-    rows = [{"name": n, "hidden": False, "count": None, "columns": [], "primary_keys": []} for n in visible]
-    rows += [{"name": n, "hidden": True, "count": None, "columns": [], "primary_keys": []} for n in hidden]
+    rows = [
+        {"name": n, "hidden": False, "count": None, "columns": [], "primary_keys": []}
+        for n in visible
+    ]
+    rows += [
+        {"name": n, "hidden": True, "count": None, "columns": [], "primary_keys": []}
+        for n in hidden
+    ]
     return {"tables": rows}
 
 
@@ -83,8 +89,19 @@ async def test_list_databases(
     names_in_response = {row["name"] for row in envelope.data}
     assert names_in_response == set(config.ALLOWED_DATABASES)
 
+    # Phase 6 / D6-03: list_databases rows now carry per-row `license` +
+    # `license_url` in addition to the original 3 keys. The cache is unbound
+    # in this direct-handler-call test, so list_databases falls back to
+    # config.LICENSES — license_text equals config.LICENSES[name][0] when the
+    # DB has an entry, else "".
     for row in envelope.data:
-        assert set(row.keys()) == {"name", "description", "table_count"}
+        assert set(row.keys()) == {
+            "name",
+            "description",
+            "table_count",
+            "license",
+            "license_url",
+        }
         assert row["description"] == config.DATABASE_DESCRIPTIONS[row["name"]]
         if row["name"] == "sglawwatch":
             assert row["table_count"] == 3  # 5 total - 2 hidden

@@ -5,8 +5,16 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from mcp_zeeker.core.middleware.access_log import StructuredLogMiddleware
+from mcp_zeeker.core.middleware.retrieved_at import RetrievedAtMiddleware
 
 mcp = FastMCP(name="zeeker", version="0.1.0")
+# MUST be the FIRST mcp.add_middleware() call — Phase 6 D6-09 / D6-10 /
+# Pitfall 4. FastMCP middleware executes FIFO ("first added is first in,
+# last out"). Placing RetrievedAtMiddleware first guarantees the
+# tool_started_at contextvar is bound on every call that reaches the
+# handler, even after Phase 7 adds rate-limit middleware that may raise
+# ToolError before call_next.
+mcp.add_middleware(RetrievedAtMiddleware())
 mcp.add_middleware(StructuredLogMiddleware())
 
 # Tool modules register themselves on import via @mcp.tool decorator.

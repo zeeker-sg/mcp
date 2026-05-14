@@ -305,7 +305,9 @@ async def test_default_databases_searches_all_four(
 
 
 async def test_preview_shape_uniform(datasette_client, httpx_mock: pytest_httpx.HTTPXMock) -> None:
-    """SEARCH-04 / D4-21: every row in envelope.data has exactly the 6 preview keys."""
+    """SEARCH-04 / D4-21 + Phase 6 D6-03 / D6-05: every row in envelope.data has
+    exactly the 9 preview keys — the original 6 preview keys plus the Phase 6
+    additions (per-row license, license_url, citation)."""
     from mcp_zeeker.tools.search import search
 
     _stub_four_dbs(httpx_mock)
@@ -313,7 +315,21 @@ async def test_preview_shape_uniform(datasette_client, httpx_mock: pytest_httpx.
 
     envelope = await search(query="appeal")
 
-    expected_keys = {"title", "date", "summary", "url", "database", "table"}
+    expected_keys = {
+        "title",
+        "date",
+        "summary",
+        "url",
+        "database",
+        "table",
+        # Phase 6 / D6-03 + D6-05 additions. `_citation` (underscore prefix)
+        # avoids collision with upstream columns literally named `citation`
+        # (e.g., judgments.citation). Matches the canonical convention in
+        # core/citation.py.
+        "license",
+        "license_url",
+        "_citation",
+    }
     for row in envelope.data:
         assert set(row.keys()) == expected_keys, (
             f"row keys mismatch: {set(row.keys())} vs {expected_keys}"

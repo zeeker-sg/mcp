@@ -33,6 +33,13 @@ Security properties (auditable by inspection):
 - `fan_out_search` NEVER raises: per-table failures are captured in
   `failure_statuses` and the handler decides error mapping (D4-09).
 
+Phase 6 / Plan 06-02 extends per-row shape from 6 keys to 9 keys: each
+normalized search row now also carries `license`, `license_url`, and
+`citation` per D6-03 (per-row license/license_url on multi-DB envelopes) and
+D6-05 (per-row citation via `synthesize_citation`). The envelope-level
+provenance still carries `LICENSE_MIXED` + `license_url=None` because the
+response spans multiple DBs.
+
 References: D4-02 / D4-05 / D4-12 / D4-18, 04-RESEARCH.md §3.1 / §3.2 / §3.7 /
 §3.8, 04-PATTERNS.md (search orchestrator templates).
 """
@@ -45,7 +52,10 @@ import anyio
 import structlog
 
 from mcp_zeeker import config
+from mcp_zeeker.core.citation import synthesize_citation
 from mcp_zeeker.core.datasette_client import DatasetteClient, UpstreamCallFailed
+from mcp_zeeker.core.metadata_cache import MetadataCache
+from mcp_zeeker.core.middleware.retrieved_at import get_tool_started_at
 from mcp_zeeker.core.visibility import _visible_tables
 
 log = structlog.get_logger()
@@ -194,12 +204,28 @@ async def _one_table(
             error_class=type(exc).__name__,
         )
         return
-    # Normalize per D4-12 / D4-21 — emit EXACTLY 6 keys per row.
-    # resolve_preview_columns already filtered HEAVY_COLUMNS at resolution time
-    # (defense-in-depth — D3-04 / D4-12 / Plan 04-01), so heavy columns cannot
-    # be inlined here even if upstream returned them.
+    # Normalize per D4-12 / D4-21 — emit EXACTLY 9 keys per row (Phase 6
+    # extended the original 6-key shape with license / license_url / citation
+    # per D6-03 + D6-05). resolve_preview_columns already filtered
+    # HEAVY_COLUMNS at resolution time (defense-in-depth — D3-04 / D4-12 /
+    # Plan 04-01), so heavy columns cannot be inlined here even if upstream
+    # returned them. Search returns preview-only rows (no retrieved_content
+    # block), so D6-14 keeps `_policy` out of the search response entirely.
     raw_rows = result.get("rows") or []
     normalized: list[dict] = []
+    # Hoist per-dispatch values outside the per-row loop — `db` and the bound
+    # retrieved_at are constant across every row produced by this _one_table
+    # call (D6-09: single timestamp per tool call). One license_for_sync /
+    # one get_tool_started_at per dispatch, not per row (T-06-13 DoS bound).
+    retrieved_at_for_call = get_tool_started_at()
+    # MetadataCache binding is guaranteed in production by app.py lifespan; in
+    # direct-handler-call unit tests the cache may be unbound — fall back to
+    # config.LICENSES so the row-shape contract holds. Mirrors the
+    # `_license_pair` helper in core/envelope.py (Plan 06-02 Task 1).
+    try:
+        license_text, license_url_val = MetadataCache.current().license_for_sync(db)
+    except RuntimeError:
+        license_text, license_url_val = config.LICENSES.get(db, ("", ""))
     for r in raw_rows:
         title_col = preview.get("title")
         date_col = preview.get("date")
@@ -213,6 +239,17 @@ async def _one_table(
                 "url": r.get(url_col) if url_col else None,
                 "database": db,
                 "table": table,
+                # D6-03: per-row license + license_url. Empty-string license_url
+                # collapses to None for clean wire payload.
+                "license": license_text,
+                "license_url": license_url_val or None,
+                # D6-05/06/07/08: per-row citation. synthesize_citation reads
+                # config.CITATION_TEMPLATES[(db, table)] with DEFAULT_CITATION_TEMPLATE
+                # fallback; _SafeDict handles None values + injects {retrieved_at}.
+                # Underscore-prefixed `_citation` key matches the canonical
+                # convention in core/citation.py (avoids collision with
+                # upstream columns literally named `citation`).
+                "_citation": synthesize_citation(db, table, r, retrieved_at_for_call),
             }
         )
     out_rows[(db, table)] = normalized

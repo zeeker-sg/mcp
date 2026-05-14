@@ -115,21 +115,49 @@ def _supports_fragments(database: str, table: str) -> bool:
     ),
 )
 async def list_databases() -> Envelope:
-    """Phase 1 first tool — proves the end-to-end transport + envelope path."""
+    """Phase 1 first tool — proves the end-to-end transport + envelope path.
+
+    Phase 6 D6-03: each row carries per-row `license` + `license_url` sourced
+    from `MetadataCache.current().license_for_sync(name)` (upstream
+    `/-/metadata.json` non-empty wins, otherwise `config.LICENSES`). The
+    envelope-level provenance still carries `LICENSE_MIXED` + `license_url=None`
+    because the response spans all four DBs — the LLM reads the per-row
+    attribution for the actual posture.
+    """
     client = DatasetteClient.current()
     summaries = await asyncio.gather(
         *(client.get_database(name) for name in config.ALLOWED_DATABASES),
         return_exceptions=False,
     )
     rows = []
+    # MetadataCache binding is guaranteed in production by app.py lifespan; in
+    # direct-handler-call unit tests (tests/tools/test_discovery.py) the cache
+    # may be unbound — fall back to config.LICENSES so the row-shape contract
+    # holds without forcing every direct-call test to bind the cache. Mirrors
+    # the `_license_pair` helper in core/envelope.py (Plan 06-02 Task 1).
+    try:
+        cache = MetadataCache.current()
+        _cache_available = True
+    except RuntimeError:
+        cache = None
+        _cache_available = False
     for name, summary in zip(config.ALLOWED_DATABASES, summaries, strict=True):
         hidden_set = config.HIDDEN_TABLES.get(name, set())
         visible_count = sum(1 for t in summary.tables if not t.hidden and t.name not in hidden_set)
+        # D6-03: per-row license + license_url. license_url empty-string
+        # collapses to None for clean JSON wire payload (mirrors envelope
+        # factories — see core/envelope.py).
+        if _cache_available:
+            license_text, license_url = cache.license_for_sync(name)
+        else:
+            license_text, license_url = config.LICENSES.get(name, ("", ""))
         rows.append(
             {
                 "name": name,
                 "description": config.DATABASE_DESCRIPTIONS.get(name, ""),
                 "table_count": visible_count,
+                "license": license_text,
+                "license_url": license_url or None,
             }
         )
     return Envelope.for_database_list(rows=rows)
