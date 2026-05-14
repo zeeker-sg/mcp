@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 6 context gathered
-last_updated: "2026-05-14T13:49:41.178Z"
-last_activity: 2026-05-14 -- Phase 06 execution started
+status: paused
+stopped_at: Phase 6 Plan 06-03 Task 4 — awaiting operator UAT sign-off in tests/manual/PHASE6-CLIENT-VERIFY.md
+last_updated: "2026-05-14T14:42:00.000Z"
+last_activity: 2026-05-14 -- Phase 06 plans 1-3 implementation green (328/3 tests); operator UAT pending
 progress:
   total_phases: 9
   completed_phases: 5
@@ -25,10 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-14)
 
 ## Current Position
 
-Phase: 06 (envelope-hardening-injection-resistance-labelling) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 06
-Last activity: 2026-05-14 -- Phase 06 execution started
+Phase: 06 (envelope-hardening-injection-resistance-labelling) — PAUSED at Plan 06-03 Task 4
+Plan: 3 of 3 (Plan 06-03 Task 4 awaits operator UAT sign-off)
+Status: Paused — operator must walk tests/manual/PHASE6-CLIENT-VERIFY.md and fill the F-4 Sign-off block, then reply "approved"
+Last activity: 2026-05-14 -- Plans 06-01, 06-02 merged; Plan 06-03 tests 1-3 GREEN (328/3); manual UAT shipped UNSIGNED
+
+**Resume:** After operator UAT sign-off, continue with `/gsd-code-review 06`, `/gsd-verify-work 06`, then `/gsd-execute-phase 06` (re-runs verification only since all SUMMARYs exist).
 
 Progress: [████████████████████] 13/13 plans (100%)
 
