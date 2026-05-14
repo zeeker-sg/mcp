@@ -102,7 +102,12 @@ Plans:
   2. Each result row contains preview fields only — title, date, summary (where present), URL, database, table — with no heavy text columns inlined; rows originating from hidden tables are filtered out before the envelope is built.
   3. User input containing FTS5 special characters (`"`, `(`, `*`, `:`, `OR`, `AND`, `NEAR`) is quote-escaped (wrapped in double quotes, internal quotes doubled), so a query like `Section 5(a)` succeeds as phrase search.
   4. A malformed query that survives escaping and triggers an upstream FTS5 syntax error returns `invalid_query` from the locked error catalog — never `upstream_unavailable` or a pass-through 400.
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 04-01-PLAN.md — Foundation: config.py 3 globals + Pagination/Envelope extension + raise_invalid_query + TableSummary.fts_table + UpstreamCallFailed.status + core/fts_escape.py + core/search.py skeleton + tests/conftest.py consolidation + Wave 0 stubs
+- [ ] 04-02-PLAN.md — Walking slice: core/search.py body (searchable_tables_for + fan_out_search) + tools/search.py @mcp.tool handler body + GREEN tests for happy paths / errors / side-channel / orchestrator
+- [ ] 04-03-PLAN.md — Hardening: auto-discovery FOUR-gate filter tests + INJ-05 hostile-input corpus (5 canaries × 2 paths)
+- [ ] 04-04-PLAN.md — Manual UAT: tests/manual/PHASE4-CLIENT-VERIFY.md (8 scenarios + F-4 dry-run sign-off)
 **UI hint**: no
 **Research flag**: standard patterns — `/gsd-research-phase` optional
 
@@ -190,7 +195,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 1. Skeleton transport + first tool | 0/6 | Not started | - |
 | 2. Discovery surface + denylists | 0/3 | Not started | - |
 | 3. Structured retrieval + URL-keyed fetch | 4/4 | Complete    | 2026-05-14 |
-| 4. Cross-database search | 0/TBD | Not started | - |
+| 4. Cross-database search | 0/4 | Not started | - |
 | 5. Transparent fragment-parent joins | 0/TBD | Not started | - |
 | 6. Envelope hardening + injection-resistance labelling | 0/TBD | Not started | - |
 | 7. Rate limit + structured errors + healthz + logs | 0/TBD | Not started | - |
