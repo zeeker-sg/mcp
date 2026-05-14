@@ -15,6 +15,7 @@ Every successful response is **citation-ready, scope-bounded, and safe to feed b
 - ✓ `query_table` defaults to per-table "light" column sets — heavy text columns opt-in via `columns` parameter, returned under `retrieved_content` — Phase 3 (D3-19 snapshot contract; live-verified byte-exact across Claude Desktop + Claude Code)
 - ✓ URL-keyed `fetch` for tables with natural URL keys (per-table mapping) — Phase 3 (FETCH-03 strips heavy + FK columns; FETCH-04 deliberately distinguishes `unsupported_table_for_fetch` from `unknown_table`)
 - ✓ Injection-resistance via consistent envelope labeling and a fixed trailing sentence on every tool description — Phase 3 (INJ-01 TOOL_TRAILER live-visible in Claude Desktop; INJ-05 verified on three attack shapes — hostile URL on unsupported table, hostile URL on not_found, cursor shape-mismatch — zero user-input echo in error bodies)
+- ✓ Provenance envelope citation-readiness across narrow-column projections and cold-cache lookups — Phase 6.1 (D6.1-01 cold-cache license fallback to `config.LICENSES`; D6.1-02 transparent citation-column augmentation in `query_table`/`fetch`/`search`; D6.1-03 mlaw_news heavy-column `_sort=rowid` fix; D6.1-04 live drift probe rewritten to assert dual-layer invariant)
 
 ### Active
 
@@ -98,4 +99,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-14 after Phase 5 (transparent-fragment-parent-joins)*
+*Last updated: 2026-05-14 after Phase 6.1 (envelope-hardening-gaps)*
