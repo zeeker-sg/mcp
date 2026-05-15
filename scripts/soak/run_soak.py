@@ -70,10 +70,13 @@ def _build_envelope(tool: str, args: dict, rng: random.Random) -> bytes:
 async def _one_request(
     client: httpx.AsyncClient,
     sem: asyncio.Semaphore,
-    latency_log: list,
+    lat_writer: csv.writer,  # type: ignore[type-arg]
     rng: random.Random,
 ) -> None:
-    """Send a single tool-call request, categorise the outcome, and append to latency_log.
+    """Send a single tool-call request, categorise the outcome, and write to lat_writer.
+
+    Rows are streamed directly to latency.csv via lat_writer rather than
+    buffered in memory (WR-01: unbounded list OOM risk at high 429 rates).
 
     Error categories (per 08-RESEARCH.md Open Q5):
       pool_timeout    — httpx.PoolTimeout (connection-pool exhaustion cascade signal)
@@ -117,7 +120,7 @@ async def _one_request(
         except Exception as exc:  # noqa: BLE001 — soak MUST log every class
             status = -3
             error_class = type(exc).__name__
-        latency_log.append((wall_ts, status, time.perf_counter() - start, error_class))
+        lat_writer.writerow((wall_ts, status, time.perf_counter() - start, error_class))
 
 
 async def _rss_sampler_loop(
@@ -150,11 +153,11 @@ async def run_soak(args: argparse.Namespace) -> None:
     """Main soak coroutine.
 
     Opens a single httpx.AsyncClient for the whole soak, bounds concurrency
-    with asyncio.Semaphore, runs an RSS sidecar task, and writes latency.csv
-    + rss.csv on completion.
+    with asyncio.Semaphore, runs an RSS sidecar task, and streams latency rows
+    directly to latency.csv (WR-01: avoids OOM from unbounded in-memory list).
+    rss.csv is written at the end (RSS samples at 60s intervals; bounded ~1440 rows).
     """
     deadline_mono = time.monotonic() + args.duration
-    latency_log: list = []
     rss_log: list = []
     rng = random.Random(0)  # deterministic seed for reproducibility
 
@@ -170,42 +173,47 @@ async def run_soak(args: argparse.Namespace) -> None:
             except (ValueError, OSError):
                 server_pid = None
 
-    async with httpx.AsyncClient(
-        base_url=args.target_url,
-        timeout=httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0),
-    ) as client:
-        sem = asyncio.Semaphore(args.concurrency)
-        sampler = asyncio.create_task(
-            _rss_sampler_loop(
-                rss_log,
-                server_pid,
-                args.rss_sample_interval,
-                deadline_mono,
-            )
-        )
-        try:
-            while time.monotonic() < deadline_mono:
-                # Fire a concurrency-sized batch of requests per tick.
-                # asyncio.gather runs them in parallel up to the semaphore limit.
-                await asyncio.gather(
-                    *[_one_request(client, sem, latency_log, rng) for _ in range(args.concurrency)]
-                )
-        finally:
-            sampler.cancel()
-            try:
-                await sampler
-            except asyncio.CancelledError:
-                pass
-
-    # Write CSV outputs
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    with (out_dir / "latency.csv").open("w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["wall_ts", "status", "duration_seconds", "error_class"])
-        writer.writerows(latency_log)
+    # Open latency.csv at startup and stream rows directly — avoids unbounded
+    # in-memory accumulation (WR-01). The file is flushed/closed when the
+    # `with` block exits (on normal completion or exception).
+    with (out_dir / "latency.csv").open("w", newline="") as lat_f:
+        lat_writer = csv.writer(lat_f)
+        lat_writer.writerow(["wall_ts", "status", "duration_seconds", "error_class"])
 
+        async with httpx.AsyncClient(
+            base_url=args.target_url,
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0),
+        ) as client:
+            sem = asyncio.Semaphore(args.concurrency)
+            sampler = asyncio.create_task(
+                _rss_sampler_loop(
+                    rss_log,
+                    server_pid,
+                    args.rss_sample_interval,
+                    deadline_mono,
+                )
+            )
+            try:
+                while time.monotonic() < deadline_mono:
+                    # Fire a concurrency-sized batch of requests per tick.
+                    # asyncio.gather runs them in parallel up to the semaphore limit.
+                    await asyncio.gather(
+                        *[
+                            _one_request(client, sem, lat_writer, rng)
+                            for _ in range(args.concurrency)
+                        ]
+                    )
+            finally:
+                sampler.cancel()
+                try:
+                    await sampler
+                except asyncio.CancelledError:
+                    pass
+
+    # Write rss.csv — RSS samples at 60s intervals; max ~1440 rows over 24h (bounded).
     rss_header_note = "rss_kb" if server_pid is not None else "rss_kb_DRIVER_NOT_SERVER"
     with (out_dir / "rss.csv").open("w", newline="") as f:
         writer = csv.writer(f)
