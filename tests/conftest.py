@@ -432,3 +432,61 @@ def frozen_retrieved_at():
         yield frozen
     finally:
         tool_started_at.reset(token)
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — Rate limit fixtures (single-plan-touch rule per 02-LEARNINGS)
+# ---------------------------------------------------------------------------
+# All Phase 7 conftest additions live in Plan 07-01 ONLY. Plans 07-02 / 07-03 /
+# 07-04 / 07-05 / 07-06 MUST NOT modify this file. The cross-plan merge-
+# conflict learning from earlier phases dictates consolidation: any helper a
+# downstream wave needs is pre-included here.
+
+
+@pytest.fixture
+def fake_clock():
+    """Inject a controllable monotonic clock into RateLimitMiddleware.
+
+    Returns a list `[0.0]` so tests can advance time by mutating fake_clock[0].
+    The rate limiter constructor receives `time_provider=lambda: fake_clock[0]`.
+    Matches the Phase 6 `frozen_retrieved_at` injection pattern (no freezegun
+    — direct injection per 02-LEARNINGS / D6-12).
+    """
+    return [0.0]
+
+
+@pytest.fixture
+def rate_limiter(fake_clock):
+    """RateLimitMiddleware instance with injected fake clock + locked test limits.
+
+    Exposes the production RATE_* knobs (config.RATE_BURST etc.) so unit tests
+    exercise the real burst/daily/store ceilings — no test-only constants. The
+    `dummy_app` is a no-op ASGI app; unit tests typically drive _check_bucket
+    directly, but a small subset await the full __call__ to verify the 429
+    response shape.
+    """
+    from mcp_zeeker import config
+    from mcp_zeeker.core.middleware.rate_limit import RateLimitMiddleware
+
+    async def dummy_app(scope, receive, send):
+        return None
+
+    return RateLimitMiddleware(
+        dummy_app,
+        burst=config.RATE_BURST,
+        sustained_per_second=config.RATE_SUSTAINED_PER_SECOND,
+        daily_limit=config.RATE_DAILY_LIMIT,
+        store_cap=config.RATE_STORE_CAP,
+        idle_ttl_seconds=config.RATE_IDLE_TTL_SECONDS,
+        time_provider=lambda: fake_clock[0],
+    )
+
+
+@pytest.fixture
+def bucket_store(rate_limiter):
+    """Direct access to the rate limiter's bucket store dict for assertion.
+
+    Plans 07-02 / 07-03 use this to assert on store size + per-IP bucket
+    state without going through the public middleware __call__ path.
+    """
+    return rate_limiter._store

@@ -38,3 +38,54 @@ def ip_prefix(ip: str) -> str:
         return ":".join(ip.split(":")[:3])
     parts = ip.split(".")
     return ".".join(parts[:3]) if len(parts) == 4 else ip
+
+
+def client_ip_from_scope(scope: dict, depth: int) -> str:
+    """Raw-ASGI sibling of client_ip() for middleware that operates on Scope.
+
+    Reproduces the right-to-left XFF-parsing semantics of client_ip() but reads
+    headers directly from the ASGI scope dict (no HTTPConnection construction).
+    Used by RateLimitMiddleware which sits below RequestIdMiddleware in the
+    Starlette middleware stack — both layers must agree on the keying IP for
+    the bucket lookup and the structlog ip_prefix contextvar to align.
+
+    Args:
+        scope: ASGI scope dict; must contain "headers" (list[tuple[bytes,bytes]]).
+            Optionally contains "client" (tuple[str, int]) for the TCP peer.
+        depth: Number of trusted reverse-proxy hops (config.TRUSTED_PROXY_DEPTH).
+
+    Returns:
+        The best-guess client IP string. Empty string when no XFF header AND no
+        scope client tuple is available. Caller is responsible for handling the
+        empty string (RateLimitMiddleware substitutes "_unknown" for keying).
+    """
+    headers = {
+        k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])
+    }
+    xff = headers.get("x-forwarded-for", "")
+    if xff:
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        # parts = [client, proxy1, proxy2, ...]; rightmost depth entries are trusted.
+        # With depth=1 and a single Caddy hop that has overwritten XFF, parts ==
+        # [client_ip] and we return parts[0].
+        if len(parts) <= depth:
+            return parts[0] if parts else ""
+        return parts[-(depth + 1)]
+    # No XFF header — fall back to the immediate peer (Caddy in production, the
+    # ASGITransport in tests).
+    client = scope.get("client")
+    return client[0] if client else ""
+
+
+def _normalize_ip_key(ip: str) -> str:
+    """Strip matching IPv6 brackets so dict-keying is consistent.
+
+    XFF entries occasionally arrive as `[::1]:8080` or `[::1]`. The rate-limit
+    bucket store keys on the bare IP form so a bracketed and an unbracketed
+    duplicate of the same IPv6 client share one bucket.
+    """
+    if not ip:
+        return ip
+    if ip.startswith("[") and ip.endswith("]"):
+        return ip[1:-1]
+    return ip

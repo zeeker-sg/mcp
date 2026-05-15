@@ -18,6 +18,7 @@ from mcp_zeeker import config
 from mcp_zeeker.core.http_client import build_http_client
 from mcp_zeeker.core.logging import configure_logging
 from mcp_zeeker.core.middleware.origin import OriginAllowlistMiddleware
+from mcp_zeeker.core.middleware.rate_limit import RateLimitMiddleware
 from mcp_zeeker.core.middleware.request_id import RequestIdMiddleware
 from mcp_zeeker.server import mcp  # FastMCP instance
 
@@ -101,11 +102,22 @@ app = Starlette(
     ],
     middleware=[
         # Outermost first. Request-ID binds the contextvar so subsequent
-        # rejects (Origin) carry it in their log line.
+        # rejects (Origin, RateLimit) carry it in their log line.
         Middleware(RequestIdMiddleware),
         Middleware(
             OriginAllowlistMiddleware,
             allowed_origins=config.ALLOWED_ORIGINS,
+        ),
+        # RateLimit fires BEFORE Mount("/mcp", ...) so 429 short-circuits
+        # at the ASGI layer (RATE-02). Reads the locked RATE_* knobs from
+        # config; in-memory bucket store is single-process per RATE-06.
+        Middleware(
+            RateLimitMiddleware,
+            burst=config.RATE_BURST,
+            sustained_per_second=config.RATE_SUSTAINED_PER_SECOND,
+            daily_limit=config.RATE_DAILY_LIMIT,
+            store_cap=config.RATE_STORE_CAP,
+            idle_ttl_seconds=config.RATE_IDLE_TTL_SECONDS,
         ),
     ],
     lifespan=lifespan,
