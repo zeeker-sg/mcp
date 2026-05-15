@@ -801,3 +801,135 @@ async def test_hostile_xff_does_not_leak_into_log(asgi_client, hostile):
     assert pat.match(ip_pfx) is not None, (
         f"ip_prefix in 429 log line is neither a valid prefix nor '_invalid': {ip_pfx!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Soak bypass — X-Soak-Bypass header skips rate limiting entirely.
+# These tests reuse the same rate_limiter / fake_clock fixtures and the
+# _build_scope helper at the top of this file.
+# ---------------------------------------------------------------------------
+
+
+def _build_scope_with_soak_header(client_ip: str, token: str) -> dict:
+    """Like _build_scope but adds an X-Soak-Bypass header."""
+    return {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"x-soak-bypass", token.encode("latin-1")),
+        ],
+        "client": (client_ip, 443),
+    }
+
+
+async def test_soak_bypass_skips_rate_limit_beyond_burst(rate_limiter, fake_clock, monkeypatch):
+    """A request with a valid X-Soak-Bypass token bypasses the bucket entirely.
+
+    Drain the burst with 20 unauthenticated calls (returns 200-ish — the inner
+    app is a no-op stub that produces no response body, but the limiter does
+    call self.app, so we see no 429). Then send the 21st WITH the soak header
+    and assert no 429 short-circuit fires.
+    """
+    monkeypatch.setenv("SOAK_BYPASS_TOKEN", "soak-test-token")
+
+    # First, drain 20 tokens via the public _check_bucket helper (same as
+    # existing tests) — fast path that doesn't drive the full __call__.
+    now_utc = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    for _ in range(20):
+        allowed, _ = rate_limiter._check_bucket("1.2.3.4", fake_clock[0], now_utc)
+        assert allowed is True
+
+    # The bucket is now drained — an unauthenticated 21st call would return 429.
+    # Confirm the un-bypassed path still 429s:
+    start_un, _ = await _drive(rate_limiter, _build_scope("1.2.3.4"))
+    assert start_un["status"] == 429
+
+    # Now send the 22nd call WITH the soak token. The limiter must short-circuit
+    # to self.app (which our captured-send sees as no http.response.start
+    # because the test stub doesn't produce one). The lack of a 429 start
+    # message IS the evidence the bypass fired.
+    messages: list[dict] = []
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg: dict) -> None:
+        messages.append(msg)
+
+    bypass_scope = _build_scope_with_soak_header("1.2.3.4", "soak-test-token")
+    await rate_limiter(bypass_scope, receive, send)
+
+    # The rate limiter must NOT have produced a 429 start message; if it
+    # short-circuited correctly, no http.response.start with status 429 appears.
+    starts = [m for m in messages if m["type"] == "http.response.start"]
+    rate_limited_starts = [m for m in starts if m["status"] == 429]
+    assert rate_limited_starts == [], (
+        f"soak bypass should suppress 429; got {rate_limited_starts!r}"
+    )
+
+
+async def test_soak_bypass_wrong_token_still_rate_limited(rate_limiter, fake_clock, monkeypatch):
+    """A header value that doesn't match the configured token does NOT bypass."""
+    monkeypatch.setenv("SOAK_BYPASS_TOKEN", "expected-token")
+
+    now_utc = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    for _ in range(20):
+        rate_limiter._check_bucket("9.9.9.9", fake_clock[0], now_utc)
+
+    # 21st call with WRONG token → should 429.
+    bypass_scope = _build_scope_with_soak_header("9.9.9.9", "wrong-token")
+    start, _ = await _drive(rate_limiter, bypass_scope)
+    assert start["status"] == 429, "wrong token must not bypass rate limit"
+
+
+async def test_soak_bypass_env_unset_still_rate_limited(rate_limiter, fake_clock, monkeypatch):
+    """Default-safe: when env is unset, even a request with the header is rate-limited."""
+    monkeypatch.delenv("SOAK_BYPASS_TOKEN", raising=False)
+
+    now_utc = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    for _ in range(20):
+        rate_limiter._check_bucket("8.8.8.8", fake_clock[0], now_utc)
+
+    bypass_scope = _build_scope_with_soak_header("8.8.8.8", "any-token")
+    start, _ = await _drive(rate_limiter, bypass_scope)
+    assert start["status"] == 429, (
+        "with SOAK_BYPASS_TOKEN unset, the header must have no effect (default-safe)"
+    )
+
+
+async def test_soak_bypass_does_not_log_token(rate_limiter, fake_clock, monkeypatch, capsys):
+    """The bypass path must not emit the token into any output.
+
+    Drains the burst, then sends a bypass-token request and a wrong-token
+    request, and asserts neither the configured token nor any header value
+    appears in captured stdout/stderr.
+    """
+    secret = "very-secret-soak-token-do-not-leak"
+    monkeypatch.setenv("SOAK_BYPASS_TOKEN", secret)
+
+    now_utc = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    for _ in range(20):
+        rate_limiter._check_bucket("7.7.7.7", fake_clock[0], now_utc)
+
+    # _drive expects a http.response.start message; the bypass path passes
+    # through to self.app (a no-op test stub) which doesn't produce one, so
+    # we drive with bare receive/send and discard messages.
+    messages: list[dict] = []
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg: dict) -> None:
+        messages.append(msg)
+
+    bypass_scope = _build_scope_with_soak_header("7.7.7.7", secret)
+    await rate_limiter(bypass_scope, receive, send)
+
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    # And the secret must not appear in any ASGI message either (defence in depth).
+    for msg in messages:
+        assert secret not in repr(msg), f"secret leaked into ASGI message: {msg!r}"

@@ -57,6 +57,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcp_zeeker import config
 from mcp_zeeker.core.ip import _normalize_ip_key, client_ip_from_scope
+from mcp_zeeker.core.soak_auth import is_soak_authenticated
 
 logger = structlog.get_logger()
 
@@ -131,6 +132,15 @@ class RateLimitMiddleware:
         # Non-HTTP scopes (lifespan, websocket) pass through unchanged — verbatim
         # from origin.py line 29-31.
         if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Soak bypass: a request carrying a valid X-Soak-Bypass token skips
+        # rate limiting entirely. Default-safe — `is_soak_authenticated`
+        # returns False unless SOAK_BYPASS_TOKEN is set on the server AND
+        # the header matches via hmac.compare_digest. The token is never
+        # touched here (it never enters logs, error bodies, or scope mutation).
+        if is_soak_authenticated(scope):
             await self.app(scope, receive, send)
             return
 
