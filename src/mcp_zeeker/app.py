@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from mcp_zeeker import config
+from mcp_zeeker.core.admin import admin_metrics
 from mcp_zeeker.core.http_client import build_http_client
 from mcp_zeeker.core.logging import configure_logging
 from mcp_zeeker.core.middleware.origin import OriginAllowlistMiddleware
@@ -98,6 +99,9 @@ async def healthz(_request):
 app = Starlette(
     routes=[
         Route("/healthz", healthz),
+        # /admin/metrics — soak-token-gated RSS read-out; returns 404 when
+        # unauthenticated (no surface). See core/admin.py.
+        Route("/admin/metrics", admin_metrics),
         Mount("/mcp", app=mcp_app),
     ],
     middleware=[
