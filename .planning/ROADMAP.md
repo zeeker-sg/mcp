@@ -200,7 +200,23 @@ Plans:
   3. Live integration tests gated by `ZEEKER_LIVE=1` pass against the real `data.zeeker.sg` deployment (nightly + pre-release schedule documented in CI).
   4. A 24h soak under synthetic load shows p50 < 300ms and p95 < 1.5s for non-fragment tools, stable resident memory < 256 MB, 50 concurrent requests handled without saturation, no `PoolTimeout` cascade, bounded log growth, and correct daily rate-limit rollover.
   5. Runtime dependency footprint is exactly six packages (`fastmcp`, `httpx`, `starlette`, `uvicorn`, `pydantic`, `structlog`) plus four dev packages (`pytest`, `pytest-asyncio`, `pytest-httpx`, `ruff`); deployment README documents the Anthropic IP-allowlist requirement and the single-worker Uvicorn constraint.
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+**Wave 0**
+- [ ] 08-01-PLAN.md — NFR-04 dep-footprint test + CR-02 carryover (lifespan getattr fix + regression test)
+
+**Wave 1** *(blocked on Wave 0)*
+- [ ] 08-02-PLAN.md — TEST-01 unit-test sweep (13 filter ops + hidden-data sweep + rate-limit/error/cursor verification)
+
+**Wave 2** *(blocked on Wave 0)*
+- [ ] 08-03-PLAN.md — TEST-03/04/06 (envelope snapshot per tool + 9-canary corpus + 1500-frag traceability)
+
+**Wave 3** *(blocked on Wave 0; 08-04 + 08-05 parallel)*
+- [ ] 08-04-PLAN.md — TEST-02 live golden path + .github/workflows/live-tests.yml
+- [ ] 08-05-PLAN.md — TEST-05 + NFR-01..03 soak harness (scripts/soak/ + .github/workflows/soak.yml)
+
+**Wave 4** *(blocked on all prior)*
+- [ ] 08-06-PLAN.md — NFR-05 README delta + REQUIREMENTS.md traceability sweep
 **UI hint**: no
 **Research flag**: standard patterns — `/gsd-research-phase` optional
 
@@ -233,5 +249,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Envelope hardening + injection-resistance labelling | 0/3 | Not started | - |
 | 6.1. Envelope hardening gap closure | 1/1 | Complete    | 2026-05-14 |
 | 7. Rate limit + structured errors + healthz + logs | 6/6 | Gaps Found  | 2026-05-15 |
-| 8. Full tests + 24h soak | 0/TBD | Not started | - |
+| 8. Full tests + 24h soak | 0/6 | Planned     | - |
 | 9. Submission PR to anthropics/claude-for-legal | 0/TBD | Not started | - |
