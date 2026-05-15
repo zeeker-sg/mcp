@@ -18,10 +18,28 @@ Tests cover:
 
 from __future__ import annotations
 
+from typing import get_args
+
 import pytest
 from fastmcp.exceptions import ToolError
 
-from mcp_zeeker.core.filter_compiler import Filter, compile_filters
+from mcp_zeeker.core.filter_compiler import Filter, FilterOp, compile_filters
+
+ALL_OPS = (
+    "exact",
+    "not",
+    "contains",
+    "startswith",
+    "endswith",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "in",
+    "notin",
+    "isnull",
+    "notnull",
+)
 
 VISIBLE = {"title", "organisation", "penalty_amount", "decision_type", "score"}
 TYPES = {
@@ -278,3 +296,51 @@ def test_multiple_filters_compile_to_list_of_pairs():
     assert ("penalty_amount__isnull", "1") in out
     assert isinstance(out, list)
     assert all(isinstance(p, tuple) and len(p) == 2 for p in out)
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 TEST-01: parametrized completeness sweep + numeric × column-type matrix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("op", ALL_OPS)
+def test_op_in_locked_set(op: str) -> None:
+    """TEST-01 / D3-02: every op in ALL_OPS is in FilterOp AND the total count is exactly 13.
+
+    Catches BOTH directions of drift:
+    - op silently removed from FilterOp → assertion fails for that op
+    - op silently added to FilterOp → len == 13 assertion fails
+
+    Failure message names the actual op set so triage is one-line.
+    """
+    actual = get_args(FilterOp)
+    assert op in actual, (
+        f"FilterOp drift: op {op!r} missing from declared set. "
+        f"FilterOp drift: declared={actual!r}, expected_count=13"
+    )
+    assert len(actual) == 13, f"FilterOp drift: declared={actual!r}, expected_count=13"
+
+
+@pytest.mark.parametrize(
+    "op, col_type",
+    [(op, ct) for op in ("gt", "gte", "lt", "lte") for ct in ("INTEGER", "REAL", "TEXT")],
+)
+def test_numeric_ops_across_column_types(op: str, col_type: str) -> None:
+    """TEST-01 / D3-10: numeric ops behave deterministically by column type.
+
+    For each combination of (gt, gte, lt, lte) × (INTEGER, REAL, TEXT),
+    compile_filters must return a list with exactly one tuple whose first
+    element starts with 'col__' and whose second element is a non-empty string.
+    Exercises the numeric coercion path per filter_compiler.py:146-181.
+    """
+    visible = {"col"}
+    types = {"col": col_type}
+    # Use a value that is coercible for all three column types: "10"
+    f = Filter(column="col", op=op, value="10")
+    out = compile_filters([f], visible_columns=visible, column_types=types)
+    assert len(out) == 1, f"expected 1 pair for op={op!r} col_type={col_type!r}, got {out!r}"
+    key, val = out[0]
+    assert key.startswith("col__"), (
+        f"expected key starting with 'col__', got {key!r} for op={op!r} col_type={col_type!r}"
+    )
+    assert val != "", f"expected non-empty value for op={op!r} col_type={col_type!r}, got {val!r}"
