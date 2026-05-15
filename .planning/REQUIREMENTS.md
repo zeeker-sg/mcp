@@ -268,17 +268,17 @@ Populated by gsd-roadmapper on 2026-05-13.
 | OBS-05 | Phase 1 | Pending |
 | CFG-01 | Phase 1 | Pending |
 | CFG-02 | Phase 1 | Pending |
-| NFR-01 | Phase 8 | Pending |
-| NFR-02 | Phase 8 | Pending |
-| NFR-03 | Phase 8 | Pending |
-| NFR-04 | Phase 8 | Pending |
-| NFR-05 | Phase 8 | Pending |
-| TEST-01 | Phase 8 | Pending |
-| TEST-02 | Phase 8 | Pending |
-| TEST-03 | Phase 8 | Pending |
-| TEST-04 | Phase 8 | Pending |
-| TEST-05 | Phase 8 | Pending |
-| TEST-06 | Phase 8 | Pending |
+| NFR-01 | Phase 8 | Satisfied (08-05 report-gate) |
+| NFR-02 | Phase 8 | Satisfied (08-05 driver --concurrency 50) |
+| NFR-03 | Phase 8 | Satisfied (08-05 report-gate) |
+| NFR-04 | Phase 8 | Satisfied (08-01 dep-footprint test) |
+| NFR-05 | Phase 8 | Satisfied (08-06 README delta) |
+| TEST-01 | Phase 8 | Satisfied (08-02) |
+| TEST-02 | Phase 8 | Satisfied (08-04) |
+| TEST-03 | Phase 8 | Satisfied (08-03) |
+| TEST-04 | Phase 8 | Satisfied (08-03 docstring marker; test originated in Phase 5) |
+| TEST-05 | Phase 8 | Satisfied (08-05 smoke gate; full 24h via workflow_dispatch) |
+| TEST-06 | Phase 8 | Satisfied (08-03) |
 | SUB-01 | Phase 9 | Pending |
 | SUB-02 | Phase 9 | Pending |
 | SUB-03 | Phase 9 | Pending |
