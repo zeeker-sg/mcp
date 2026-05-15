@@ -33,9 +33,14 @@ jobs:
 
       - name: Start uvicorn (single worker per RATE-06)
         run: |
+          set -euo pipefail
           uv run uvicorn mcp_zeeker.app:app --host 127.0.0.1 --port 8000 --workers 1 > /tmp/uvicorn.log 2>&1 &
           echo $! > /tmp/uvicorn.pid
-          sleep 5  # poll-until-ready preferred — see live_server pattern in conftest.py
+          # Poll /healthz until ready (max 60 s); fail fast if server never starts.
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8000/healthz && break || sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/healthz || { echo "ERROR: server failed to start after 60s — check /tmp/uvicorn.log"; exit 1; }
 
       - name: Run 24h soak
         run: |
