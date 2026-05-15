@@ -206,14 +206,14 @@ Plans:
 - [x] 08-01-PLAN.md — NFR-04 dep-footprint test + CR-02 carryover (lifespan getattr fix + regression test)
 
 **Wave 1** *(blocked on Wave 0)*
-- [ ] 08-02-PLAN.md — TEST-01 unit-test sweep (13 filter ops + hidden-data sweep + rate-limit/error/cursor verification)
+- [x] 08-02-PLAN.md — TEST-01 unit-test sweep (13 filter ops + hidden-data sweep + rate-limit/error/cursor verification)
 
 **Wave 2** *(blocked on Wave 0)*
-- [ ] 08-03-PLAN.md — TEST-03/04/06 (envelope snapshot per tool + 9-canary corpus + 1500-frag traceability)
+- [x] 08-03-PLAN.md — TEST-03/04/06 (envelope snapshot per tool + 9-canary corpus + 1500-frag traceability)
 
 **Wave 3** *(blocked on Wave 0; 08-04 + 08-05 parallel)*
-- [ ] 08-04-PLAN.md — TEST-02 live golden path + .github/workflows/live-tests.yml
-- [ ] 08-05-PLAN.md — TEST-05 + NFR-01..03 soak harness (scripts/soak/ + .github/workflows/soak.yml)
+- [x] 08-04-PLAN.md — TEST-02 live golden path + .github/workflows/live-tests.yml
+- [x] 08-05-PLAN.md — TEST-05 + NFR-01..03 soak harness (scripts/soak/ + .github/workflows/soak.yml)
 
 **Wave 4** *(blocked on all prior)*
 - [ ] 08-06-PLAN.md — NFR-05 README delta + REQUIREMENTS.md traceability sweep
