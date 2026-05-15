@@ -101,8 +101,7 @@ def test_all_errors_have_stable_code():
         # `.message` attribute on the public API.
         message = str(exc_info.value)
         assert message.startswith(f"{expected_prefix}: "), (
-            f"{raise_fn.__name__} produced {message!r}; "
-            f"expected prefix {expected_prefix!r}"
+            f"{raise_fn.__name__} produced {message!r}; expected prefix {expected_prefix!r}"
         )
 
     # invalid_filter_op + invalid_cursor — raised inline; assert the literal
@@ -195,9 +194,7 @@ def test_upstream_4xx_no_echo():
     # constructing the upstream exception with hostile content and verifying
     # the helper-emitted ToolError contains NONE of it.
     hostile_body = "<evil user query body containing 'DROP TABLE'>"
-    upstream_exc = UpstreamCallFailed(
-        f"upstream 400 on /search.json: {hostile_body}", status=400
-    )
+    upstream_exc = UpstreamCallFailed(f"upstream 400 on /search.json: {hostile_body}", status=400)
     # Sanity check: the upstream exception itself carries the body for log
     # diagnostics — but that is the LOG path, not the ToolError path.
     assert hostile_body in str(upstream_exc)
