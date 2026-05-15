@@ -102,12 +102,21 @@ In production on the zeeker host, `UPSTREAM_URL` is set to `https://data.zeeker.
 gitignored `docker-compose.override.yml`. The MCP container has no shared Docker network
 with the zeeker-datasette stack, so the public URL is the correct target.
 
-### Anthropic IP allowlist (forward-looking)
+### Anthropic IP allowlist
 
-The deployed instance must accept connections from Anthropic's published egress IP ranges to
-be reachable via Claude Desktop and Claude Code. Phase 1 ships without an explicit IP
-allowlist; Phase 9 (registry submission) will add the operational note and any Caddy-level
-`trusted_proxies` configuration needed.
+The deployed instance must accept inbound connections from Anthropic's MCP egress IP ranges
+to be reachable via Claude Desktop and Claude Code. Anthropic does not (as of 2026-05) publish
+a stable, machine-readable list of MCP-egress IPs; operators should:
+
+1. Consult Anthropic's operator-facing documentation or registry-onboarding contact for the
+   current allowlist.
+2. Apply the allowlist at the host Caddy layer (or upstream firewall), NOT in the MCP
+   container — Caddy already owns ingress per `Caddyfile.prod`.
+3. Re-verify the allowlist at Phase 9 (registry submission) and quarterly thereafter; the
+   IPs change without notice.
+
+Operators who allowlist by domain rather than IP can use Anthropic's published egress hostnames
+where available; this trades a lookup hop for resilience to IP churn.
 
 ## Environment
 
