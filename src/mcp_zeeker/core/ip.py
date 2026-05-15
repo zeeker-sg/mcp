@@ -2,6 +2,8 @@
 # Source: 01-RESEARCH.md Pattern G lines 561–600 (paste verbatim, import-path adjusted)
 from __future__ import annotations
 
+import ipaddress
+
 from starlette.requests import HTTPConnection
 
 from mcp_zeeker import config
@@ -31,13 +33,34 @@ def client_ip(conn: HTTPConnection) -> str:
 
 
 def ip_prefix(ip: str) -> str:
-    """OBS-04: log only the /24 prefix to avoid full-IP retention."""
+    """OBS-04 / CR-01: validate input via ipaddress.ip_address() and return
+    a sanitised prefix or the fixed sentinel "_invalid".
+
+    Inputs that do not parse as a valid IPv4 or IPv6 address (including
+    hostile XFF bytes that an attacker might send to poison structured
+    logs) are replaced with the literal string "_invalid". This forecloses
+    the CR-01 log-injection chain:
+        attacker XFF -> client_ip -> ip_prefix -> structlog contextvar
+        -> merge_contextvars -> every log line.
+
+    Returns:
+        - "" for the empty string (preserves existing "no IP" semantics).
+        - "_invalid" for any non-parseable input.
+        - "a.b.c" (first 3 octets) for IPv4 (/24 prefix per OBS-04).
+        - Canonical /48 network base address string for IPv6 (closes WR-01
+          incidentally — the previous naive colon-split produced malformed
+          prefixes like "2001:db8:" for zero-compressed addresses).
+    """
     if not ip:
         return ""
-    if ":" in ip:  # IPv6 — take first 3 groups
-        return ":".join(ip.split(":")[:3])
-    parts = ip.split(".")
-    return ".".join(parts[:3]) if len(parts) == 4 else ip
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return "_invalid"
+    if isinstance(addr, ipaddress.IPv4Address):
+        return ".".join(str(addr).split(".")[:3])
+    # IPv6: canonical /48 network address (closes WR-01).
+    return str(ipaddress.ip_network(f"{addr.exploded}/48", strict=False).network_address)
 
 
 def client_ip_from_scope(scope: dict, depth: int) -> str:

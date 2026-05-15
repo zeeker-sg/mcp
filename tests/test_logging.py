@@ -80,20 +80,39 @@ def test_ip_prefix_truncates_ipv4_to_24():
 
 
 def test_ip_prefix_truncates_ipv6_to_48():
-    """OBS-04: ip_prefix returns the /48 prefix for IPv6 (first 3 colon-groups).
+    """OBS-04 / CR-01: ip_prefix returns the canonical /48 network address for IPv6.
 
-    Tests use IPv6 addresses with at least 4 explicit groups before any '::' so
-    that splitting on ':' yields >= 4 parts and the first 3 are unambiguous.
+    After the CR-01 rewrite, ip_prefix() routes IPv6 through
+    ipaddress.ip_network(addr/48).network_address, which produces the
+    canonical zero-compressed network base address. This is stable across
+    all input forms of the same network (full vs. zero-compressed).
 
-    Note: addresses collapsed with '::' that have fewer than 4 total groups
-    (e.g. 'fe80::1') result in only 3 split parts, so all groups are returned —
-    this is a known limitation of the string-split truncation approach.
+    WR-01 closure: the previous naive colon-split produced malformed
+    prefixes like "2001:db8:" for "2001:db8::1"; the canonical form is
+    "2001:db8::".
     """
-    # Standard /48 test — 2001:db8::/32 space, with unique host bits
-    assert ip_prefix("2001:db8::1") == "2001:db8:"
-    # Full form with 4+ groups before collapse
-    assert ip_prefix("2001:db8:cafe:1::1") == "2001:db8:cafe"
-    assert ip_prefix("fd00:1234:5678::1") == "fd00:1234:5678"
+    # 2001:db8::/32 space -- /48 network base is 2001:db8::
+    assert ip_prefix("2001:db8::1") == "2001:db8::"
+    # 2001:db8:cafe::/48 -- network base is 2001:db8:cafe::
+    assert ip_prefix("2001:db8:cafe:1::1") == "2001:db8:cafe::"
+    # fd00:1234:5678::/48
+    assert ip_prefix("fd00:1234:5678::1") == "fd00:1234:5678::"
+
+
+def test_ip_prefix_rejects_non_ip():
+    """CR-01: hostile / non-IP strings return the "_invalid" sentinel.
+
+    ip_prefix() validates input via ipaddress.ip_address() and substitutes
+    a fixed sentinel for non-parseable input — attacker bytes never echo
+    into the structured log contextvar.
+    """
+    assert ip_prefix("</system><admin>SECRET") == "_invalid"
+    assert ip_prefix("DROP TABLE users; --") == "_invalid"
+    assert ip_prefix('" OR 1=1 --') == "_invalid"
+    assert ip_prefix("\x00\x01control") == "_invalid"
+    assert ip_prefix("1.2.3.4 OR 1=1") == "_invalid"  # legitimate-shaped non-IP
+    # Empty string is the documented "no IP" sentinel — NOT "_invalid".
+    assert ip_prefix("") == ""
 
 
 def test_request_id_regex_validates_incoming():
