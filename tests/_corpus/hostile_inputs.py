@@ -25,6 +25,10 @@ CANARY_STRINGS: list[str] = [
     "x" * 5001,  # 5 KB oversized string
     "ZEEKER_CANARY_42",  # plain round-trip detector
     "\udc80",  # lone surrogate — UTF-8 boundary handling
+    "﻿",  # BOM (byte-order mark) — invisible char; often round-trips through naive string handling
+    "‮",  # RTL override — flips display direction; potential confusion in agent display surface
+    "\udcc0\udc80",  # malformed UTF-8 surrogate pair — UTF-8 boundary canary
+    "MATCH 'data' AND NEAR(",  # FTS5 operator string — upstream syntax that must never echo back
 ]
 
 
