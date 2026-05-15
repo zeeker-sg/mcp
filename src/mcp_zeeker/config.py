@@ -450,6 +450,26 @@ ALLOWED_ORIGINS: tuple[str, ...] = ("https://claude.ai", "https://claude.com")
 TRUSTED_PROXY_DEPTH: int = 1
 
 # ---------------------------------------------------------------------------
+# Rate limiting — RATE-01..06
+# ---------------------------------------------------------------------------
+# Single source of truth for the anonymous-tier rate-limit knobs. The ASGI
+# RateLimitMiddleware reads these via app.py's Middleware(...) wiring; no
+# inline duplication anywhere else in the codebase. AST single-source-of-
+# truth lookup test gates direct re-reads outside the helper layer.
+
+# Token bucket: burst capacity (max tokens in bucket at any time) — RATE-01.
+RATE_BURST: int = 20
+# Token refill rate: sustained 1 request per second = 60 per minute — RATE-01.
+RATE_SUSTAINED_PER_SECOND: float = 1.0
+# Daily per-IP ceiling: resets at 00:00 UTC — D7-01.
+RATE_DAILY_LIMIT: int = 5_000
+# Maximum number of IP buckets held in memory (LRU backstop) — RATE-04.
+RATE_STORE_CAP: int = 100_000
+# Idle TTL in seconds for non-daily-locked buckets (15 minutes) — D7-03.
+# Daily-locked buckets get max(this, seconds_to_utc_midnight) per D7-03.
+RATE_IDLE_TTL_SECONDS: float = 900.0
+
+# ---------------------------------------------------------------------------
 # Observability — OBS-04
 # ---------------------------------------------------------------------------
 
