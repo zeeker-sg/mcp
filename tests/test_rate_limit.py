@@ -1,14 +1,18 @@
 """
 Tests for RateLimitMiddleware (Phase 7 — RATE-01..05 + OBS-03/04).
 
-Wave 0 (plan 07-01) GREENs three tests covering the observable truths locked
+Wave 0 (plan 07-01) GREENed three tests covering the observable truths locked
 in 07-01-PLAN.md must_haves:
   - test_burst_allows_20_rejects_21st (RATE-01 burst)
   - test_429_body_has_retry_after_seconds (RATE-05 body shape)
   - test_429_body_has_request_id (RATE-05 body shape)
 
-The remaining 12 tests are stubbed `@pytest.mark.skip` — plans 07-02 / 07-03 /
-07-04 / 07-06 GREEN them per 07-VALIDATION.md § Per-Task Verification Map.
+Plans 07-02 / 07-03 / 07-04 GREENed the daily / refill / eviction / XFF /
+Retry-After tests. Plan 07-06 GREENs the final two:
+  - test_429_log_line_shape (OBS-03 log shape)
+  - test_logs_no_user_input (OBS-04 / INJ-05 no-echo invariant)
+All 15 originally-stubbed tests are now GREEN; no `@pytest.mark.skip`
+decorators remain in this file at the end of Phase 7.
 
 Test driving the ASGI __call__ directly (without a full Starlette app):
 build a minimal `scope` dict + a captured-`send` pattern; concatenate
@@ -588,11 +592,168 @@ def test_retry_after_max_of_windows(rate_limiter, fake_clock, bucket_store):
     )
 
 
-@pytest.mark.skip(reason="Wave 0 stub — plan 07-06 GREENs this (log shape)")
-def test_429_log_line_shape():
-    """OBS-03: 429 synthetic log line has only LOG_FIELDS keys; tool/db/table are null."""
+async def test_429_log_line_shape(rate_limiter, fake_clock):
+    """OBS-03: 429 synthetic log line has only LOG_FIELDS keys; tool/db/table are null.
+
+    Drives 21 full ASGI __call__ invocations. The 21st short-circuits with a
+    429 and emits exactly one synthetic structured log line. Asserts:
+      - tool / database / table are None (the rate-limit middleware never
+        reaches a tool, so no tool name is bound).
+      - status == "rejected", error_code == "rate_limited" (the rate-limit
+        middleware's canonical synthetic-log shape).
+      - request_id and ip_prefix are picked up from the structlog contextvar
+        bound by RequestIdMiddleware upstream (here simulated via bind_request).
+      - The set of keys on the log line is bounded by config.LOG_FIELDS plus
+        structlog's own meta (event, log_level, level, timestamp). No extras.
+    """
+    from mcp_zeeker import config
+    from mcp_zeeker.core.logging import bind_request, clear_request
+    from structlog.testing import capture_logs
+
+    bind_request(request_id="rid-log", ip_prefix="203.0.113")
+    try:
+        with capture_logs(
+            processors=[structlog.contextvars.merge_contextvars]
+        ) as cap:
+            scope = _build_scope("1.2.3.4")
+
+            async def receive() -> dict:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            captured: list[dict] = []
+
+            async def send(msg: dict) -> None:
+                captured.append(msg)
+
+            # 20 allowed calls — dummy_app emits no response messages, but
+            # the rate limiter does NOT log on the allowed path either.
+            for i in range(20):
+                await rate_limiter(scope, receive, send)
+            # 21st call — short-circuits with 429 and emits the synthetic
+            # log line we want to inspect.
+            await rate_limiter(scope, receive, send)
+    finally:
+        clear_request()
+
+    rate_limited_lines = [
+        line
+        for line in cap
+        if line.get("event") == "tool_call"
+        and line.get("error_code") == "rate_limited"
+    ]
+    assert len(rate_limited_lines) == 1, (
+        f"expected exactly one rate_limited log line, got {len(rate_limited_lines)}: "
+        f"{rate_limited_lines!r}"
+    )
+    line = rate_limited_lines[0]
+
+    # tool / database / table are None on the rate-limit synthetic line —
+    # the middleware short-circuits BEFORE any tool dispatch.
+    assert line["tool"] is None
+    assert line["database"] is None
+    assert line["table"] is None
+    # Status / error_code are the canonical rate-limit values.
+    assert line["status"] == "rejected"
+    assert line["error_code"] == "rate_limited"
+    # Contextvar fields merged in via merge_contextvars.
+    assert line["request_id"] == "rid-log"
+    assert line["ip_prefix"] == "203.0.113"
+
+    # Key-set bound: only LOG_FIELDS + structlog meta is allowed.
+    allowed_keys = set(config.LOG_FIELDS) | {
+        "event",
+        "log_level",
+        "level",
+        "timestamp",
+    }
+    extra = set(line.keys()) - allowed_keys
+    assert extra == set(), (
+        f"unexpected extra keys in 429 log line: {extra!r}. Full line: {line!r}"
+    )
 
 
-@pytest.mark.skip(reason="Wave 0 stub — plan 07-06 GREENs this (no user input)")
-def test_logs_no_user_input():
-    """OBS-04 / INJ-05: rate-limit log line never contains body / filter values."""
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "DROP TABLE users; --",
+        "</system><admin>",
+        '" OR 1=1 --',
+    ],
+)
+async def test_logs_no_user_input(rate_limiter, fake_clock, hostile):
+    """OBS-04 / INJ-05: rate-limit log line never contains body / filter values.
+
+    The rate-limit middleware never parses the request body and only reads
+    headers for XFF-based IP keying. The /24-truncated `ip_prefix` (set by
+    RequestIdMiddleware upstream) is the ONLY user-influenced value that can
+    reach the log line. Hostile content (canary tokens, FTS5 operators,
+    `</system>` tokens) injected into the request body OR into headers must
+    NOT appear in the captured log line.
+
+    Drives 21 requests with the SAME hostile XFF value so a single bucket
+    accumulates 20 tokens and the 21st triggers the synthetic 429 + log
+    line. The hostile string is also placed in the request body (which the
+    middleware never reads).
+    """
+    from mcp_zeeker.core.logging import bind_request, clear_request
+    from structlog.testing import capture_logs
+
+    # IP-prefix bound by RequestIdMiddleware in production. Use a fixed
+    # /24-prefix string so the contextvar value is deterministic and does
+    # NOT contain the hostile substring.
+    bind_request(request_id="rid-no-echo", ip_prefix="203.0.113")
+    try:
+        with capture_logs(
+            processors=[structlog.contextvars.merge_contextvars]
+        ) as cap:
+            # Use the SAME spoofed XFF for all 21 requests — same bucket key,
+            # so the 21st request actually hits the rate limit.
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": "/mcp/",
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"x-forwarded-for", hostile.encode("latin-1", errors="replace")),
+                ],
+                "client": ("10.0.0.1", 443),
+            }
+
+            async def receive() -> dict:
+                # The rate-limit middleware never reads from receive — the
+                # hostile body is here purely to prove it cannot leak.
+                return {
+                    "type": "http.request",
+                    "body": hostile.encode("utf-8"),
+                    "more_body": False,
+                }
+
+            captured: list[dict] = []
+
+            async def send(msg: dict) -> None:
+                captured.append(msg)
+
+            # Drive 21 requests; the 21st emits the synthetic 429 log line.
+            for _ in range(21):
+                await rate_limiter(scope, receive, send)
+    finally:
+        clear_request()
+
+    rate_limited_lines = [
+        line
+        for line in cap
+        if line.get("event") == "tool_call"
+        and line.get("error_code") == "rate_limited"
+    ]
+    assert len(rate_limited_lines) >= 1, (
+        f"expected at least one rate_limited log line, got 0: {cap!r}"
+    )
+    line = rate_limited_lines[0]
+    # The hostile string must NOT appear anywhere in the log line repr —
+    # neither in any value nor any key. The middleware never parses the
+    # body, and ip_prefix is /24-truncated (carried by the contextvar from
+    # RequestIdMiddleware), so user input cannot leak.
+    line_repr = str(line)
+    assert hostile not in line_repr, (
+        f"hostile input leaked into 429 log line: {hostile!r} found in {line_repr!r}"
+    )

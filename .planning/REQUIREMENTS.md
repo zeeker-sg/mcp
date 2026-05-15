@@ -162,6 +162,17 @@ Deferred. Tracked but not in current roadmap.
 - **DISC2-01**: `describe_database` with cross-table relationship hints
 - **DISC2-02**: Faceted search facets exposed in `search` response
 
+### Observability (deferred from v1)
+
+- **OBS-02**: `/internal/upstream-status` operator-only endpoint — deferred to v2 per Phase 7
+  decision D7-04/D7-05. Operators inspect upstream health via
+  `curl https://data.zeeker.sg/-/metadata.json` from outside the container in v1. The v1
+  surface ships `/healthz` (OBS-01) for process liveness only; an in-process upstream-health
+  endpoint is intentionally out of scope until the API-keyed-tier work in v2 introduces an
+  ops-token / loopback-listener model. Honest traceability over false-positive closure
+  (D7-05): the requirement bullet remains in §3.7 with the original Phase 1 mapping; the
+  traceability row above is the source of truth for status.
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -251,7 +262,7 @@ Populated by gsd-roadmapper on 2026-05-13.
 | ERR-04 | Phase 7 | Pending |
 | ERR-05 | Phase 7 | Pending |
 | OBS-01 | Phase 1 | Pending |
-| OBS-02 | Phase 1 | Pending |
+| OBS-02 | Phase 1 | Deferred to v2 (D7-05) |
 | OBS-03 | Phase 1 | Pending |
 | OBS-04 | Phase 1 | Pending |
 | OBS-05 | Phase 1 | Pending |

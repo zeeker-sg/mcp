@@ -18,6 +18,8 @@ The DENY 403 case is also middleware-level and works for any path.
 
 from __future__ import annotations
 
+import pytest_httpx
+
 
 async def test_healthz_returns_ok_without_upstream(asgi_client):
     """OBS-01: /healthz returns {"status": "ok"} without any upstream call.
@@ -28,6 +30,24 @@ async def test_healthz_returns_ok_without_upstream(asgi_client):
     resp = await asgi_client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+async def test_healthz_dispatches_no_httpx_request(
+    asgi_client, httpx_mock: pytest_httpx.HTTPXMock
+):
+    """OBS-01 belt-and-suspenders: /healthz MUST NOT dispatch any upstream call.
+
+    pytest-httpx records every outgoing httpx call; if /healthz emits one,
+    this test fails. No responses are registered on httpx_mock — an unexpected
+    upstream call would surface as an unmatched request error.
+    """
+    resp = await asgi_client.get("/healthz")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    # Zero upstream requests dispatched — /healthz is liveness-only.
+    assert httpx_mock.get_requests() == [], (
+        f"/healthz dispatched unexpected upstream requests: {httpx_mock.get_requests()!r}"
+    )
 
 
 async def test_origin_missing_allowed(asgi_client):
