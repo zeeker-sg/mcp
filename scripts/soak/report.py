@@ -233,6 +233,12 @@ def main() -> int:
     summary_out = Path(args.summary_out) if args.summary_out else results_dir / "soak-summary.md"
 
     # Load CSVs
+    if not latency_path.exists():
+        print(
+            f"ERROR: latency.csv not found at {latency_path}; did the soak driver run?",
+            file=sys.stderr,
+        )
+        return 1
     durations_ms, errors = _load_latency(latency_path)
     rss_kb = _load_rss(rss_path) if rss_path.exists() else []
 
