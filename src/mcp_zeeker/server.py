@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from mcp_zeeker.core.middleware.access_log import StructuredLogMiddleware
+from mcp_zeeker.core.middleware.error_enrichment import ErrorEnrichmentMiddleware
 from mcp_zeeker.core.middleware.retrieved_at import RetrievedAtMiddleware
 
 mcp = FastMCP(name="zeeker", version="0.1.0")
@@ -15,6 +16,9 @@ mcp = FastMCP(name="zeeker", version="0.1.0")
 # handler, even after Phase 7 adds rate-limit middleware that may raise
 # ToolError before call_next.
 mcp.add_middleware(RetrievedAtMiddleware())
+# ERR-03: append [request_id: ...] to ToolError messages — registered AFTER
+# RetrievedAt so retrieved_at stays bound during error handling.
+mcp.add_middleware(ErrorEnrichmentMiddleware())
 mcp.add_middleware(StructuredLogMiddleware())
 
 # Tool modules register themselves on import via @mcp.tool decorator.
