@@ -203,7 +203,7 @@ Plans:
 **Plans**: 6 plans
 Plans:
 **Wave 0**
-- [ ] 08-01-PLAN.md — NFR-04 dep-footprint test + CR-02 carryover (lifespan getattr fix + regression test)
+- [x] 08-01-PLAN.md — NFR-04 dep-footprint test + CR-02 carryover (lifespan getattr fix + regression test)
 
 **Wave 1** *(blocked on Wave 0)*
 - [ ] 08-02-PLAN.md — TEST-01 unit-test sweep (13 filter ops + hidden-data sweep + rate-limit/error/cursor verification)
