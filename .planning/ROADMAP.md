@@ -216,7 +216,7 @@ Plans:
 - [x] 08-05-PLAN.md — TEST-05 + NFR-01..03 soak harness (scripts/soak/ + .github/workflows/soak.yml)
 
 **Wave 4** *(blocked on all prior)*
-- [ ] 08-06-PLAN.md — NFR-05 README delta + REQUIREMENTS.md traceability sweep
+- [x] 08-06-PLAN.md — NFR-05 README delta + REQUIREMENTS.md traceability sweep
 **UI hint**: no
 **Research flag**: standard patterns — `/gsd-research-phase` optional
 
