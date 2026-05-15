@@ -640,11 +640,13 @@ async def test_1500_fragment_walk_synthetic(
     metadata_cache,
     httpx_mock: pytest_httpx.HTTPXMock,
 ) -> None:
-    """FRAG-04: 15 synthetic page responses walked end-to-end via the keyset
+    """FRAG-04 / TEST-04: 15 synthetic page responses walked end-to-end via the keyset
     cursor — zero row loss, `truncated=False` on every page, terminal
     `next_cursor=None` on page 15. Verifies the qhash stays stable across all
     15 pages of identical-shape requests (D5-06) and that the keyset cursor
     encode/decode round-trip is durable beyond Datasette's 1000-row cap.
+
+    TEST-04 owner: Phase 8 (regression test originated in Phase 5 D5-06).
     """
     synth_url = "https://synth.example.gov.sg/case/15hundred"
     synth_parent_id = "synth_parent_15hundred"
