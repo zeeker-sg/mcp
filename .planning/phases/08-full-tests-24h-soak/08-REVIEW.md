@@ -27,7 +27,7 @@ findings:
   warning: 4
   info: 2
   total: 8
-status: issues_found
+status: fixes_applied
 ---
 
 # Phase 8: Code Review Report
