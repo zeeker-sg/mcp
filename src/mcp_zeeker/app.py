@@ -55,7 +55,7 @@ async def lifespan(app: Starlette):
             tools = await mcp.list_tools()
             for tool in tools:
                 # Check return type annotation — every tool must return Envelope
-                if tool.return_type is not Envelope:
+                if getattr(tool, "return_type", None) is not Envelope:
                     raise RuntimeError(
                         f"tool contract drift: {tool.name} return_type is not Envelope"
                     )
