@@ -1,0 +1,62 @@
+# .github/workflows/soak.yml
+# Source: .planning/phases/08-full-tests-24h-soak/08-RESEARCH.md "CI Scheduling" line 1172
+# Purpose: TEST-05 + NFR-01..03 — full 24h soak under 50-concurrent synthetic load.
+# Trigger: workflow_dispatch ONLY (no cron — 25h CI burn per run).
+# Sibling: .github/workflows/live-tests.yml (08-04) — copy skeleton with deltas below.
+#
+# Deltas from live-tests.yml:
+#   - on: workflow_dispatch ONLY (no cron)
+#   - timeout-minutes: 1500 (25h budget)
+#   - Background-uvicorn step (live tests hit the public endpoint; soak runs locally)
+#   - Driver: --duration 86400 --concurrency 50 (full 24h at NFR-02 peak)
+#   - Report: --max-p50-ms 300 --max-p95-ms 1500 --max-rss-mb 256 (NFR-01/03 thresholds)
+#   - Artifact upload with if: always() (failures still upload diagnostic CSVs)
+
+name: 24h Soak (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1500  # 25h budget per 08-RESEARCH.md line 1111
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.14"  # CLAUDE.md pinned version
+
+      - run: uv sync --frozen
+
+      - name: Start uvicorn (single worker per RATE-06)
+        run: |
+          uv run uvicorn mcp_zeeker.app:app --host 127.0.0.1 --port 8000 --workers 1 > /tmp/uvicorn.log 2>&1 &
+          echo $! > /tmp/uvicorn.pid
+          sleep 5  # poll-until-ready preferred — see live_server pattern in conftest.py
+
+      - name: Run 24h soak
+        run: |
+          uv run python -m scripts.soak.run_soak \
+            --duration 86400 \
+            --concurrency 50 \
+            --target-url http://127.0.0.1:8000 \
+            --server-pid-file /tmp/uvicorn.pid \
+            --rss-sample-interval 60 \
+            --out-dir ./soak-results
+
+      - name: Report + gate
+        run: |
+          uv run python -m scripts.soak.report \
+            --results-dir ./soak-results \
+            --max-p50-ms 300 \
+            --max-p95-ms 1500 \
+            --max-rss-mb 256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soak-results
+          path: ./soak-results/

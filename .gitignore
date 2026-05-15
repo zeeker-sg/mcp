@@ -43,3 +43,8 @@ dist/
 
 # Local production compose override
 docker-compose.override.yml
+
+# Soak harness artifacts — can be 170 MB+ for a 24h run (per 08-RESEARCH.md)
+# Never commit; upload via actions/upload-artifact instead.
+soak-results/
+soak-smoke-results/
