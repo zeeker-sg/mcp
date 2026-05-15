@@ -23,6 +23,8 @@ from datetime import UTC, date, datetime
 import pytest
 import structlog
 
+from mcp_zeeker.core.middleware.rate_limit import BucketState
+
 # ---------------------------------------------------------------------------
 # Helpers — minimal ASGI scope + captured send for 429 response inspection
 # ---------------------------------------------------------------------------
@@ -286,24 +288,195 @@ async def test_rate_limit_fires_before_json_rpc_parse(rate_limiter):
     assert body["error"]["retry_after_seconds"] >= 1
 
 
-@pytest.mark.skip(reason="Wave 0 stub — plan 07-02 GREENs this (XFF parsing)")
-def test_xff_parsing_depth_1():
-    """RATE-03: depth=1 selects parts[-(depth+1)] from XFF."""
+async def test_xff_parsing_depth_1(rate_limiter, bucket_store):
+    """RATE-03 / T-07-04: depth=1 selects parts[-(depth+1)] from XFF.
+
+    Caddy in front of the MCP server appends the TCP peer to XFF so the
+    header arrives as `X-Forwarded-For: <client>, <caddy_peer>`. With
+    TRUSTED_PROXY_DEPTH=1 the parser drops the rightmost (Caddy) hop and
+    keys the bucket on the client (leftmost) entry. This is the canonical
+    multi-hop case from 07-RESEARCH.md § XFF Parsing.
+
+    Drive uses an inline send-capture (no _drive helper) because dummy_app
+    emits no response messages on the allowed path — _drive's StopIteration
+    on `next(...)` would surface as a coroutine RuntimeError. Mirrors the
+    inline drive pattern established in test_rate_limit_fires_before_json_rpc_parse.
+    """
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"x-forwarded-for", b"203.0.113.5, 10.0.0.1"),
+        ],
+        "client": ("10.0.0.1", 443),
+    }
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    captured: list[dict] = []
+
+    async def send(msg: dict) -> None:
+        captured.append(msg)
+
+    await rate_limiter(scope, receive, send)
+
+    # Exactly one bucket created, keyed on the leftmost (client) entry.
+    assert list(bucket_store.keys()) == ["203.0.113.5"], (
+        f"expected single bucket keyed '203.0.113.5', got {list(bucket_store.keys())!r}"
+    )
+    # Allowed path: dummy_app is a no-op so no response messages are emitted.
+    assert captured == [], f"allowed request should emit no response messages, got {captured}"
 
 
-@pytest.mark.skip(reason="Wave 0 stub — plan 07-02 GREENs this (XFF fallback)")
-def test_xff_fewer_hops_than_depth():
-    """RATE-03: when len(parts) <= depth, return parts[0]."""
+async def test_xff_fewer_hops_than_depth(rate_limiter, bucket_store):
+    """RATE-03 / T-07-04: when len(parts) <= depth, return parts[0].
+
+    Edge case from 07-RESEARCH.md § XFF Parsing § Edge Cases Handled — the
+    XFF header carries fewer hops than TRUSTED_PROXY_DEPTH (1). The
+    `client_ip_from_scope` helper falls back to the leftmost present entry
+    rather than indexing out-of-range. With one entry, that entry IS the
+    client. This guards against an IndexError in production when a misbehaving
+    upstream sends only the client IP without appending its own.
+    """
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"x-forwarded-for", b"203.0.113.5"),
+        ],
+        "client": ("10.0.0.1", 443),
+    }
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    captured: list[dict] = []
+
+    async def send(msg: dict) -> None:
+        captured.append(msg)
+
+    await rate_limiter(scope, receive, send)
+
+    assert list(bucket_store.keys()) == ["203.0.113.5"], (
+        f"expected single bucket keyed '203.0.113.5', got {list(bucket_store.keys())!r}"
+    )
+    assert captured == [], f"allowed request should emit no response messages, got {captured}"
 
 
-@pytest.mark.skip(reason="Wave 0 stub — plan 07-03 GREENs this (LRU cap)")
-def test_store_cap_enforced_under_flood():
-    """RATE-04: bucket store len() never exceeds RATE_STORE_CAP under XFF spoof flood."""
+def test_store_cap_enforced_under_flood(fake_clock):
+    """RATE-04 / T-07-05: bucket store len() never exceeds store_cap under XFF spoof flood.
+
+    Drives 200 unique spoofed-XFF entries against a fixture-sized store_cap=50
+    middleware (production cap is 100,000 — the test uses 50 for speed; the
+    algorithm is identical). After every batch LRU eviction len(store) drops
+    to ~99% of cap; the loop's invariant is the strict upper bound at the
+    moment we observe it (always at the end of `_check_bucket` after an
+    insert). Over 200 inserts the cap fires multiple times — the assertion is
+    that len(store) <= 50 at every observation point.
+    """
+    from mcp_zeeker import config
+    from mcp_zeeker.core.middleware.rate_limit import RateLimitMiddleware
+
+    async def dummy_app(scope, receive, send):
+        return None
+
+    middleware = RateLimitMiddleware(
+        dummy_app,
+        burst=config.RATE_BURST,
+        sustained_per_second=config.RATE_SUSTAINED_PER_SECOND,
+        daily_limit=config.RATE_DAILY_LIMIT,
+        store_cap=50,
+        idle_ttl_seconds=config.RATE_IDLE_TTL_SECONDS,
+        time_provider=lambda: fake_clock[0],
+    )
+
+    now_utc = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    for i in range(200):
+        # Advance the clock so every insert has a strictly increasing
+        # last_seen_ts — gives the LRU sort a deterministic eviction order.
+        fake_clock[0] += 0.01
+        middleware._check_bucket(f"198.51.100.{i}", fake_clock[0], now_utc)
+        # Cap-bound invariant must hold AFTER every insert (post _enforce_cap).
+        assert len(middleware._store) <= 50, (
+            f"store size exploded to {len(middleware._store)} after insert #{i + 1} (cap=50)"
+        )
+
+    # Final state: store is at-or-just-under cap, never above.
+    assert len(middleware._store) <= 50
+    # And the survivors must be the most-recently-seen IPs (LRU eviction
+    # behavior). The last insert was 198.51.100.199 — that one MUST still
+    # be present.
+    assert "198.51.100.199" in middleware._store
 
 
-@pytest.mark.skip(reason="Wave 0 stub — plan 07-03 GREENs this (sticky TTL)")
-def test_sticky_ttl_daily_locked_not_expired():
-    """RATE-04 / D7-03: daily-locked buckets sticky beyond standard 15-min idle TTL."""
+def test_sticky_ttl_daily_locked_not_expired(rate_limiter, fake_clock, bucket_store):
+    """RATE-04 / D7-03 / T-07-06: daily-locked buckets sticky beyond standard 15-min idle TTL.
+
+    Two assertions in one test:
+      (a) On the SAME UTC day, a daily-locked bucket survives _sweep() even
+          when it has been idle longer than the standard 15-min TTL — the
+          sticky TTL = max(15 min, seconds_to_next_utc_midnight) keeps it
+          pinned. This proves a daily-locked legitimate IP cannot bypass its
+          ceiling by going silent for 15 minutes.
+      (b) After the daily counter would naturally reset (fast-forward both
+          fake_clock and now_utc past midnight, AND clear daily_exceeded so
+          the effective TTL collapses back to 15 min), the bucket IS evicted
+          on the next _sweep — proving sticky-TTL is bounded to the locked
+          day, not perpetual.
+    """
+    fake_clock[0] = 0.0
+    key = "198.51.100.7"
+
+    # Seed a daily-locked bucket directly — fast-path equivalent to the
+    # 5000-call lock-step drive used by 07-02. Both are documented in the
+    # plan as acceptable.
+    bucket = BucketState(
+        tokens=0.0,
+        last_refill_ts=0.0,
+        daily_count=5000,
+        daily_date=date(2026, 1, 1),
+        last_seen_ts=0.0,
+        daily_exceeded=True,
+    )
+    bucket_store[key] = bucket
+
+    # (a) Advance to t=901 (just past 15-min standard TTL) and now_utc to
+    # 12:15:01 UTC on the SAME day. Effective TTL = max(900,
+    # seconds_to_next_utc_midnight ≈ 42_299) = 42_299 — bucket survives.
+    fake_clock[0] = 901.0
+    now_utc_day1_after_ttl = datetime(2026, 1, 1, 12, 15, 1, tzinfo=UTC)
+    rate_limiter._sweep(901.0, now_utc_day1_after_ttl)
+    assert key in bucket_store, (
+        "daily-locked bucket evicted by 15-min idle sweep — sticky TTL is broken"
+    )
+    # Sanity-check that the effective TTL is materially larger than 900.
+    eff = rate_limiter._effective_ttl(bucket_store[key], now_utc_day1_after_ttl)
+    assert eff > 900.0, (
+        f"effective TTL must be > 900s while daily_exceeded; got {eff}"
+    )
+
+    # (b) Cross UTC midnight. Advance fake_clock far past the now-much-smaller
+    # effective TTL, AND flip daily_exceeded off (this is what _check_bucket's
+    # date-rollover block does on the first request of the new UTC day; here
+    # we simulate it directly because _sweep does not run that branch). With
+    # daily_exceeded=False, the effective TTL collapses to the standard 15
+    # min, and the bucket's idle time (now_mono - last_seen_ts = huge) makes
+    # it eligible for eviction.
+    bucket_store[key].daily_exceeded = False
+    bucket_store[key].daily_date = date(2026, 1, 2)
+    bucket_store[key].daily_count = 0
+    # last_seen_ts stays at 0.0 — the bucket has been idle the whole time.
+    fake_clock[0] = 100_000.0  # well past 900s of idleness
+    now_utc_day2 = datetime(2026, 1, 2, 0, 0, 1, tzinfo=UTC)
+    rate_limiter._sweep(100_000.0, now_utc_day2)
+    assert key not in bucket_store, (
+        "bucket should be evicted after midnight rollover when no longer daily-locked"
+    )
 
 
 def test_retry_after_is_integer(rate_limiter, fake_clock):

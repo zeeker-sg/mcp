@@ -1,11 +1,27 @@
 # src/mcp_zeeker/core/middleware/rate_limit.py
 # Phase 7 Plan 07-01: ASGI rate-limit middleware (RATE-01 + RATE-02 + RATE-05).
+# Phase 7 Plan 07-03: filled-in eviction methods (_sweep + _enforce_cap +
+# _effective_ttl + _is_expired) closing RATE-03/RATE-04 + D7-03 contract.
 #
 # Mirrors the OriginAllowlistMiddleware ASGI shape (origin.py). Token-bucket
 # math + retry-after semantics per 07-RESEARCH.md § Token Bucket Math /
-# Retry-After Arithmetic. Sticky TTL on daily-locked buckets (D7-03) is wired
-# in this plan; the LRU sweep BODY is filled in by plan 07-03 — the call site
-# already exists here so 07-03 only supplies _sweep().
+# Retry-After Arithmetic. Sticky TTL on daily-locked buckets (D7-03) lives in
+# `_effective_ttl`; the LRU 100k backstop lives in `_enforce_cap` (called from
+# the create-new-entry branch of `_check_bucket` — the only path where store
+# size grows).
+#
+# Eviction tradeoff (RATE-04 / D7-03 — accepted, documented per 07-RESEARCH.md
+# § Bucket Store + Eviction "Critical correctness invariant"):
+#   Under a simultaneous flood of >100,000 unique attacker IPs, the batch LRU
+#   in `_enforce_cap` may evict a legitimate daily-locked bucket. When that IP
+#   re-enters, it gets a fresh BucketState with daily_count=0 — effectively
+#   bypassing its daily ceiling for the rest of the UTC day. This requires
+#   sustained pressure from >100k distinct IPs and is bounded by the 100k cap
+#   itself (the legitimate bucket's sticky TTL = max(15min, time-to-midnight)
+#   keeps it preferentially retained until the store is genuinely full of
+#   newer entries). Mitigation if observed in production: raise RATE_STORE_CAP
+#   (memory permitting) or move bucket state to a shared store (Redis) — both
+#   are v2 territory.
 #
 # Threat model:
 # - T-07-01 (Tampering / token bucket bypass): float-token refill formula is
@@ -14,6 +30,15 @@
 # - T-07-03 (Spoofing / Elevation — rate-limit AFTER JSON-RPC parse): registered
 #   in app.py BEFORE Mount("/mcp", ...) so 429 short-circuits at ASGI; even a
 #   malformed JSON-RPC body still triggers 429 (RATE-02).
+# - T-07-04 (Spoofing / XFF parsing depth): client_ip_from_scope reads XFF
+#   right-to-left at TRUSTED_PROXY_DEPTH=1; deviation requires explicit
+#   config change (RATE-03).
+# - T-07-05 (DoS / unbounded bucket store): _enforce_cap batch-LRU evicts
+#   oldest 1% (= 1,000 entries at the 100k cap) when len(store) >= store_cap;
+#   guarantees len(store) <= store_cap at all times (RATE-04).
+# - T-07-06 (Elevation / daily-lock evasion via 15-min idle): _effective_ttl
+#   returns max(15min, seconds_to_utc_midnight) when bucket.daily_exceeded —
+#   pinning the bucket until the next UTC day rolls over (D7-03).
 # - T-07-08 (Information Disclosure — user input in 429 body): body is built
 #   from FIXED string literals + integer retry_after_seconds + opaque-hex
 #   request_id; scope.body is never read before the 429 fires (INJ-05).
@@ -182,6 +207,11 @@ class RateLimitMiddleware:
                 daily_exceeded=False,
             )
             self._store[key] = bucket
+            # RATE-04: this is the only path where len(self._store) grows, so
+            # cap-enforcement is gated here rather than in __call__. Under a
+            # >100k unique-attacker-IP flood, the batch LRU in _enforce_cap
+            # backstops the store size at RATE_STORE_CAP.
+            self._enforce_cap(now_mono, now_utc)
 
         # D7-01: daily counter resets at 00:00 UTC. Reset the daily_exceeded
         # flag too so a previously-locked IP can resume on the new day.
@@ -230,9 +260,72 @@ class RateLimitMiddleware:
         )
         return max(1, math.ceil((tomorrow - now_utc).total_seconds()))
 
-    def _sweep(self, now_mono: float, now_utc: datetime) -> None:
-        """Time-gated TTL + LRU eviction sweep — body filled in by plan 07-03.
+    def _effective_ttl(self, bucket: BucketState, now_utc: datetime) -> float:
+        """D7-03 sticky-TTL: daily-locked buckets stay pinned until UTC midnight.
 
-        The call site already exists in __call__ above so 07-03 only needs to
-        supply this body (D7-03 sticky-TTL semantics + 100k cap LRU backstop).
+        Standard idle TTL is `self._idle_ttl_seconds` (15 min). For a bucket
+        whose `daily_exceeded` flag is True, return the LARGER of (15 min,
+        seconds-to-next-utc-midnight) so the bucket cannot be evicted by the
+        idle sweep before its daily counter resets at the UTC date roll. Once
+        the daily reset happens (in `_check_bucket`'s date-comparison block),
+        `daily_exceeded` flips back to False and the effective TTL collapses
+        to the standard 15 min — so an idle bucket that crosses midnight is
+        eligible for normal sweeping again on the next pass.
         """
+        if bucket.daily_exceeded:
+            return max(
+                self._idle_ttl_seconds,
+                float(self._seconds_to_utc_midnight(now_utc)),
+            )
+        return self._idle_ttl_seconds
+
+    def _is_expired(
+        self, bucket: BucketState, now_mono: float, now_utc: datetime
+    ) -> bool:
+        """True iff bucket has been idle longer than its effective TTL."""
+        return (now_mono - bucket.last_seen_ts) > self._effective_ttl(
+            bucket, now_utc
+        )
+
+    def _sweep(self, now_mono: float, now_utc: datetime) -> None:
+        """Idle-TTL eviction pass — drop buckets idle past their effective TTL.
+
+        D7-03 sticky-TTL semantics live in `_effective_ttl`: daily-locked
+        buckets are protected until the next UTC midnight. Cap-based eviction
+        is a SEPARATE concern handled by `_enforce_cap` (called from the
+        bucket-creation path in `_check_bucket`); `_sweep` only handles
+        idleness, not store size. Time-gated by `__call__`'s `_last_sweep_ts`
+        check so this runs at most once per `_sweep_interval` seconds.
+        """
+        expired = [
+            key
+            for key, bucket in self._store.items()
+            if self._is_expired(bucket, now_mono, now_utc)
+        ]
+        for key in expired:
+            del self._store[key]
+
+    # RATE-04: batch LRU backstop fires only when the store crosses
+    # RATE_STORE_CAP — under normal load it never runs.
+    def _enforce_cap(self, now_mono: float, now_utc: datetime) -> None:
+        """Batch LRU eviction at the 100k cap — DoS backstop (T-07-05).
+
+        Per 07-RESEARCH.md § Bucket Store + Eviction "Recommended LRU
+        eviction batch": when the store reaches `self._store_cap`, evict the
+        oldest 1 % of entries (= 1,000 at the production 100k cap, scales
+        linearly for smaller test fixtures) in a single pass. Sorting by
+        `last_seen_ts` ascending puts the longest-idle buckets at the front
+        of the eviction list. Daily-locked legitimate buckets are still
+        keyed on `last_seen_ts` here — the sticky TTL in `_effective_ttl`
+        does NOT influence cap-based eviction. Under a sustained flood of
+        >100,000 unique attacker IPs, this means a daily-locked legitimate
+        bucket CAN be evicted and re-enter with a fresh daily counter; that
+        tradeoff is documented in the module docstring.
+        """
+        if len(self._store) >= self._store_cap:
+            evict_count = max(1, len(self._store) // 100)
+            by_age = sorted(
+                self._store, key=lambda k: self._store[k].last_seen_ts
+            )
+            for key in by_age[:evict_count]:
+                del self._store[key]
