@@ -68,5 +68,8 @@ class ErrorEnrichmentMiddleware(Middleware):
                 # re-raise the original unmodified so the catalog code prefix
                 # stays exactly as the handler emitted it.
                 raise
-            new_message = f"{exc.message} [request_id: {request_id}]"
+            # FastMCP's ToolError exposes its message via str() / args[0] —
+            # there is no `.message` attribute on the public API. Use str(exc)
+            # to obtain the human-readable message string.
+            new_message = f"{exc!s} [request_id: {request_id}]"
             raise ToolError(new_message) from exc
