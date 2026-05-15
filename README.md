@@ -75,6 +75,24 @@ upstream clients. The `Dockerfile` bakes `--workers 1` into the `CMD`; if the op
 overrides the command, they must preserve this flag. Gunicorn with uvicorn workers has the
 same problem — do not use it.
 
+### Single-worker requirement (RATE-06)
+
+Run with exactly one Uvicorn worker:
+`uvicorn mcp_zeeker.app:app --host 0.0.0.0 --port 8000 --workers 1`. The in-memory
+rate-limit bucket is per-process; running with `--workers 2` would silently multiply the
+effective rate limit by 2 because each worker keeps its own bucket store — a class of bug
+that only shows up under load. RATE-06 in REQUIREMENTS.md mandates `--workers 1` for v1.
+
+Daily rate-limit counter resets at 00:00 UTC. Anonymous-tier clients near their daily
+ceiling will see a correlated burst at UTC midnight; the burst (20) + sustained (60/min)
+windows still apply, so this does not produce a thundering herd.
+
+Upstream health is checked by calling `curl https://data.zeeker.sg/-/metadata.json` from
+outside the container OR `docker exec <container> curl https://data.zeeker.sg/-/metadata.json`
+from inside. The in-process `/internal/upstream-status` endpoint is deferred to v2 (see
+D7-04). The public `/healthz` endpoint is liveness-only and never consults upstream
+(OBS-01).
+
 ### `UPSTREAM_URL`
 
 In local dev (`docker compose up` with no override) the default `http://datasette:8001`
