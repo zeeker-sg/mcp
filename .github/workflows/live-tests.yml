@@ -1,0 +1,28 @@
+# .github/workflows/live-tests.yml
+# Source: .planning/phases/08-full-tests-24h-soak/08-RESEARCH.md "CI Scheduling" lines 1167-1175
+# Purpose: TEST-02 — live golden path against data.zeeker.sg.
+# Trigger: nightly cron + manual workflow_dispatch (pre-release).
+
+name: Live Tests
+
+on:
+  schedule:
+    - cron: "0 2 * * *"  # 02:00 UTC nightly
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.14"  # CLAUDE.md pinned version
+
+      - run: uv sync --frozen
+
+      - run: ZEEKER_LIVE=1 uv run pytest -m live -p no:xdist
+        env:
+          UPSTREAM_URL: https://data.zeeker.sg
