@@ -35,13 +35,29 @@ _HEADER_NAME = b"x-soak-bypass"
 
 
 def _get_configured_token() -> str | None:
-    """Return the configured token, or None if unset/empty.
+    """Return the configured token, or None if unset/empty/non-ASCII.
 
     Read at call time (not module load) so tests can monkeypatch the env
     and ops can rotate the token by restarting the container.
+
+    Why ASCII-only: every HTTP request runs this check (the rate limiter
+    calls is_soak_authenticated for every request, soak-authenticated or
+    not). A token with a character above U+007F would later trip
+    `.encode("latin-1")` for some inputs and `hmac.compare_digest` for
+    non-ASCII strings. Treating non-ASCII tokens as unset is safer:
+    every request short-circuits to False (the default-safe path)
+    instead of raising on encode.
+
+    The canonical token-generation recipe (`openssl rand -hex 32`)
+    produces a 64-char ASCII string, so this restriction has no
+    operational cost.
     """
     token = os.environ.get("SOAK_BYPASS_TOKEN", "")
-    return token if token else None
+    if not token:
+        return None
+    if not token.isascii():
+        return None
+    return token
 
 
 def _extract_header(scope: Scope) -> str | None:
