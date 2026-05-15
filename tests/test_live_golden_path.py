@@ -116,8 +116,8 @@ async def test_live_describe_table(bound_live_clients) -> None:
     envelope = await describe_table("pdpc", "enforcement_decisions")
 
     assert envelope.provenance.source == "data.zeeker.sg"
-    assert "columns" in envelope.data
-    assert len(envelope.data["columns"]) >= 1
+    assert "columns" in envelope.data[0]          # envelope.data is list[dict]; access element 0
+    assert len(envelope.data[0]["columns"]) >= 1  # correct subscript
 
 
 @pytest.mark.live
