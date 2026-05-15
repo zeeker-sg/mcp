@@ -550,8 +550,11 @@ async def test_byte_identical_heavy_text_round_trip(
     # 4 canaries — which is the INJ-03 value-prop. Skip BEFORE registering
     # an unencodable stub, but AFTER the metadata cache fixture has been
     # consumed (otherwise pytest-httpx teardown complains).
-    if canary == "\udc80":
-        pytest.skip("lone-surrogate canary unrepresentable on the JSON wire (carry-forward)")
+    if canary in ("\udc80", "\udcc0\udc80"):
+        # Carry-forward per Phase 4 / 04-03-SUMMARY (lone-surrogate) and Phase 8
+        # (malformed UTF-8 surrogate pair \udcc0\udc80): both are unrepresentable
+        # as JSON UTF-8 — httpx_mock can't encode a stub containing them.
+        pytest.skip(f"surrogate canary {canary!r} unrepresentable on the JSON wire (carry-forward)")
     # Stub /{db}.json to expose judgments (the heaviest URL-keyed table).
     httpx_mock.add_response(
         url=f"{config.UPSTREAM_URL.rstrip('/')}/zeeker-judgements.json",
