@@ -99,4 +99,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-14 after Phase 6.1 (envelope-hardening-gaps)*
+*Last updated: 2026-05-15 after Phase 8 (full-tests-24h-soak) — 6/6 plans complete, verification passed (5/5); 24h soak run + live nightly run remain as deferred operational gates in 08-HUMAN-UAT.md*
