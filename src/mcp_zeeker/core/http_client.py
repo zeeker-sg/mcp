@@ -14,11 +14,10 @@ def build_http_client() -> httpx.AsyncClient:
         base_url=config.UPSTREAM_URL,
         timeout=httpx.Timeout(connect=1.0, read=10.0, write=2.0, pool=2.0),
         limits=httpx.Limits(
-            # 100 > soak concurrency (50) to absorb fan-out: search fans out to
-            # N databases per call, so one MCP request can hold multiple upstream
-            # connections simultaneously. At concurrency=50 with 20% search, the
-            # fan-out alone can saturate a pool of 50, causing PoolTimeout → 502.
-            max_connections=100,
+            # 150 covers worst-case with the fan_out_search semaphore(10):
+            # 10 concurrent search calls × 10 semaphore slots = 100 (search)
+            # + 40 non-search calls × 1 connection = 140 peak. 150 adds headroom.
+            max_connections=150,
             max_keepalive_connections=20,
             keepalive_expiry=30.0,
         ),

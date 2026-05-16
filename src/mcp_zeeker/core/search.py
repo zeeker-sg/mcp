@@ -176,6 +176,7 @@ async def _one_table(
     out_rows: dict[tuple[str, str], list[dict]],
     out_totals: dict[str, int],
     failures: list[Exception],
+    sem: anyio.Semaphore,
 ) -> None:
     """Single per-table FTS dispatch — never raises (D4-07 / INJ-05).
 
@@ -209,7 +210,8 @@ async def _one_table(
         *[("_col", c) for c in sorted(search_added_columns)],
     ]
     try:
-        result = await DatasetteClient.current().get_table_rows(db, table, params)
+        async with sem:
+            result = await DatasetteClient.current().get_table_rows(db, table, params)
     except UpstreamCallFailed as exc:
         failures.append(exc)
         log.warning(
@@ -339,6 +341,14 @@ async def fan_out_search(
     out_totals: dict[str, int] = {}
     failures: list[Exception] = []
 
+    # Per-call semaphore caps concurrent upstream connections for this search
+    # request. With ~15 searchable tables, an unbounded task group would open
+    # 15 simultaneous connections per call; at soak concurrency=50 with 20%
+    # search traffic that peaks at 150 connections, exhausting the httpx pool
+    # and causing PoolTimeout → 502. Semaphore(10) bounds each call to 10
+    # concurrent connections: worst case 10 searches × 10 = 100 (search) +
+    # 40 (non-search) = 140, within the pool limit of 150.
+    sem = anyio.Semaphore(10)
     # D4-06: structured concurrency under an outer 0.8s budget. The
     # move_on_after cancellation surfaces as task cancellation inside the
     # task group; cancelled tasks contribute nothing (no failure increment)
@@ -357,6 +367,7 @@ async def fan_out_search(
                     out_rows,
                     out_totals,
                     failures,
+                    sem,
                 )
 
     merged = _round_robin_merge(out_rows, per_table_limit)
