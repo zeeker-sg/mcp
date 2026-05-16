@@ -3,7 +3,7 @@ status: partial
 phase: 08-full-tests-24h-soak
 source: [08-VERIFICATION.md]
 started: 2026-05-15T06:58:12Z
-updated: 2026-05-15T07:30:00Z
+updated: 2026-05-17T00:38:21Z
 ---
 
 ## Current Test
@@ -25,18 +25,43 @@ ops_note: |
   on the production container and restart so the bypass cannot fire in
   steady-state operation.
 
+  2026-05-16 12:59 UTC — most recent attempted dispatch (GitHub Actions run id
+  25962546108) failed at the preflight step with HTTP 404 from
+  `/admin/metrics`. Root cause: the `SOAK_BYPASS_TOKEN` value held by the
+  GitHub Actions repo secret does not match the value baked into the
+  production container's env, so the bypass middleware does not authorise the
+  request and the metrics route (conditional on bypass) returns 404. Unblock:
+  regenerate the token (or copy the existing GH secret value), set it in the
+  prod container's env_file, restart the container, then re-trigger
+  `soak.yml` via workflow_dispatch.
+
 ### 2. Run live integration tests against data.zeeker.sg
 expected: All 6 live tests pass, including test_live_describe_table, test_live_list_tables, test_live_query_table, test_live_fetch, test_live_search, test_live_list_databases
-result: [pending]
+result: passed
 command: `ZEEKER_LIVE=1 uv run pytest -m live -v`
 prerequisites: (none — CR-01 was fixed in commit 6654c71)
+evidence:
+  date: 2026-05-17
+  command: `UPSTREAM_URL=https://data.zeeker.sg ZEEKER_LIVE=1 uv run pytest -m live -v`
+  tests:
+  - tests/test_heavy_column_upstream.py::test_mlaw_news_heavy_column_returns_content
+  - tests/test_live_golden_path.py::test_live_list_databases
+  - tests/test_live_golden_path.py::test_live_list_tables
+  - tests/test_live_golden_path.py::test_live_describe_table
+  - tests/test_live_golden_path.py::test_live_search
+  - tests/test_live_golden_path.py::test_live_query_table
+  - tests/test_live_golden_path.py::test_live_fetch
+  - tests/test_metadata_cache.py::test_live_metadata_parseable[zeeker-judgements]
+  - tests/test_metadata_cache.py::test_live_metadata_parseable[pdpc]
+  - tests/test_metadata_cache.py::test_live_metadata_parseable[sg-gov-newsrooms]
+  - tests/test_metadata_cache.py::test_live_metadata_parseable[sglawwatch]
 
 ## Summary
 
 total: 2
-passed: 0
+passed: 1
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 
