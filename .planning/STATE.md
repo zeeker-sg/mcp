@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-stopped_at: "Phase 8 verification — human_needed (4/5 SCs; CR-01 + CR-02 confirmed unfixed in 08-REVIEW.md)"
-last_updated: "2026-05-15T06:58:59.906Z"
-last_activity: 2026-05-15 -- Phase 08 verification = human_needed; HUMAN-UAT persisted
+status: phase_8_pending_uat_1
+stopped_at: "Phase 8 HUMAN-UAT #1 (24h soak) — pending operator-side SOAK_BYPASS_TOKEN rotation on prod container; HUMAN-UAT #2 (live tests) passed 11/11 locally 2026-05-17"
+last_updated: "2026-05-17T00:38:21.000Z"
+last_activity: 2026-05-17 -- HUMAN-UAT #2 passed 11/11 locally; HUMAN-UAT #1 awaiting SOAK_BYPASS_TOKEN rotation
 progress:
   total_phases: 10
   completed_phases: 10
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-05-14)
 
 Phase: 9
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-05-15
+Status: Phase 8 awaiting HUMAN-UAT #1 (24h soak)
+Last activity: 2026-05-17
 
-**Resume:** Run `/gsd-plan-phase 7 --gaps` to plan a gap-closure slice (07-07) that fixes CR-01 in `src/mcp_zeeker/core/ip.py` (validate via `ipaddress.ip_address()`, sentinel for non-parseable input) and adds a regression test that drives the FULL ASGI chain. Then `/gsd-execute-phase 7 --gaps-only`. CR-02 (`tool.return_type` on Tool base) is deferred to Phase 8 per VERIFICATION.md. Phase 6 manual UAT sign-off in `tests/manual/PHASE6-CLIENT-VERIFY.md` remains UNSIGNED — separate operator gate.
+**Resume:** Phase 8 has one remaining gate — HUMAN-UAT #1 (24h soak). It is blocked on operator-side rotation of `SOAK_BYPASS_TOKEN`: the value held by the GitHub Actions repo secret does not match the value baked into the production container's env, so the last dispatch (2026-05-16 12:59 UTC, GitHub Actions run id 25962546108) failed at preflight with HTTP 404 on `/admin/metrics`. Unblock by re-syncing the token in both places (regenerate or copy the existing GH secret value into the prod container's env_file), restarting the prod container, re-triggering `soak.yml` via workflow_dispatch on the Actions UI, then running `/gsd-verify-work 8`. HUMAN-UAT #2 (live tests vs `data.zeeker.sg`) passed 11/11 locally on 2026-05-17 — evidence in `.planning/phases/08-full-tests-24h-soak/08-HUMAN-UAT.md`.
 
 Progress: [██████████████░░░░░░] 24/25 plans (96%) — milestone v1.0 covers phases 1–9 plus 6.1 insertion
 
@@ -95,6 +95,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-15T01:45:00.000Z
-Stopped at: Phase 7 verification — gaps_found (1 BLOCKER on SC-6: CR-01 log injection)
-Resume file: .planning/phases/07-rate-limit-structured-errors-healthz-logs/07-VERIFICATION.md
+Last session: 2026-05-17T00:38:21.000Z
+Stopped at: Phase 8 HUMAN-UAT #1 (24h soak) — pending operator-side SOAK_BYPASS_TOKEN rotation on prod container; HUMAN-UAT #2 (live tests) passed 11/11 locally 2026-05-17
+Resume file: .planning/phases/08-full-tests-24h-soak/08-HUMAN-UAT.md
