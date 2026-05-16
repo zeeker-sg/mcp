@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-14)
 Phase: 9
 Plan: Not started
 Status: Phase 8 awaiting HUMAN-UAT #1 (24h soak)
-Last activity: 2026-05-17
+Last activity: 2026-05-17 - Completed quick task 260517-0s5: HUMAN-UAT #2 passed 11/11 locally; HUMAN-UAT #1 awaiting SOAK_BYPASS_TOKEN rotation
 
 **Resume:** Phase 8 has one remaining gate — HUMAN-UAT #1 (24h soak). It is blocked on operator-side rotation of `SOAK_BYPASS_TOKEN`: the value held by the GitHub Actions repo secret does not match the value baked into the production container's env, so the last dispatch (2026-05-16 12:59 UTC, GitHub Actions run id 25962546108) failed at preflight with HTTP 404 on `/admin/metrics`. Unblock by re-syncing the token in both places (regenerate or copy the existing GH secret value into the prod container's env_file), restarting the prod container, re-triggering `soak.yml` via workflow_dispatch on the Actions UI, then running `/gsd-verify-work 8`. HUMAN-UAT #2 (live tests vs `data.zeeker.sg`) passed 11/11 locally on 2026-05-17 — evidence in `.planning/phases/08-full-tests-24h-soak/08-HUMAN-UAT.md`.
 
@@ -84,6 +84,12 @@ None yet.
 - Phase 5, 7, 9 are flagged for `/gsd-research-phase` before plan-phase (fragment-join orchestration, token-bucket + XFF semantics, `.mcp.json` character-for-character mimicry respectively). Phase 3 research flag is resolved.
 - Operator-managed concerns documented in PRD/research and surfaced in Phase 7/8: Anthropic IP allowlist, reverse proxy must overwrite (not append) XFF, single Uvicorn worker, TLS terminated upstream.
 - Phase 3 deferred work: pagination.truncated upstream wiring (consumer side) — addressed in Phase 5 (FRAG-04). Two-`get_database` round-trip optimization — addressed in Phase 6 metadata-cache (IN-01). 3 accepted security risks (T-03-05 large-filter DoS, T-03-14 cursor-walk DoS, T-03-19 unsupported_table presence side-channel) are deferred to Phase 7 rate limiter or design-intent.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260517-0s5 | mark phase-08 HUMAN-UAT test #2 passed (live tests 11/11 green); refresh STATE.md | 2026-05-17 | 2dd5b18 | [260517-0s5-mark-phase-08-human-uat-test-2-passed-li](./quick/260517-0s5-mark-phase-08-human-uat-test-2-passed-li/) |
 
 ## Deferred Items
 
