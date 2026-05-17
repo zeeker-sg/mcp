@@ -50,7 +50,7 @@ from typing import Annotated
 import structlog
 from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import ToolAnnotations
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 
 from mcp_zeeker import config
 from mcp_zeeker.core import fragment_join  # Phase 5 / D5-01 — sole delegation point
@@ -76,6 +76,7 @@ from mcp_zeeker.core.visibility import (
     raise_unsupported_table_for_fetch,
 )
 from mcp_zeeker.server import mcp
+from mcp_zeeker.tools._param_coercion import _coerce_json_list
 
 log = structlog.get_logger()
 
@@ -111,6 +112,7 @@ async def query_table(
     table: Annotated[str, Field(description="Table name (e.g. 'judgments')")],
     filters: Annotated[
         list[Filter] | None,
+        BeforeValidator(_coerce_json_list),
         Field(
             default=None,
             description=(
@@ -150,6 +152,7 @@ async def query_table(
     ] = None,
     columns: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_json_list),
         Field(
             default=None,
             description="Explicit column allow-list; when omitted, returns the table's light set.",
