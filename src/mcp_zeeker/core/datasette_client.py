@@ -183,6 +183,18 @@ class DatasetteClient:
                 raise UpstreamCallFailed(f"upstream 504 on {url}", status=504)
             if 200 <= resp.status_code < 300:
                 return resp
+            # WR-260517-bki: Datasette signals upstream SQL time-limit exhaustion
+            # as HTTP 400 with {"title": "SQL Interrupted"}. Surface as
+            # QueryTimeoutError so agents read it as `query_timeout`, not
+            # `upstream_unavailable`. Scoped to 400 + explicit marker; vanilla 400s
+            # fall through. No retry (re-issuing will time out the same way).
+            if resp.status_code == 400:
+                try:
+                    body = resp.json()
+                except ValueError:
+                    body = None
+                if isinstance(body, dict) and body.get("title") == "SQL Interrupted":
+                    raise QueryTimeoutError(f"upstream SQL interrupted on {url}") from None
             # D4-09 / 04-RESEARCH §3.7: same — pass through resp.status_code.
             # The transport-error raise (httpx.RequestError above) keeps
             # status=None via default since no HTTP response was parsed.

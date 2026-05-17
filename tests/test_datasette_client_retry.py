@@ -171,3 +171,75 @@ async def test_timeout_raises_query_timeout_error(
             await client._request_with_retry("GET", "/test.json")
 
     mock_sleep.assert_not_called()
+
+
+async def test_sql_interrupted_400_raises_query_timeout(
+    httpx_mock: pytest_httpx.HTTPXMock, client: DatasetteClient
+) -> None:
+    """WR-260517-bki: Datasette 400 with {"title": "SQL Interrupted"} → QueryTimeoutError.
+
+    Live incident: query_table against zeeker-judgements.judgments_fragments
+    (81k rows, missing upstream index on judgment_id) returned HTTP 400 with
+    body {"ok": false, "error": "SQL query took too long...", "status": 400,
+    "title": "SQL Interrupted"}. The catch-all was mapping this to a bare
+    UpstreamCallFailed → `upstream_unavailable`; correct catalog code is
+    `query_timeout`. Subclass relationship preserved so existing
+    `except UpstreamCallFailed:` handlers continue to catch this path.
+    """
+    httpx_mock.add_response(
+        status_code=400,
+        json={
+            "ok": False,
+            "error": "SQL query took too long. The time limit is controlled by ...",
+            "status": 400,
+            "title": "SQL Interrupted",
+        },
+    )
+
+    with patch.object(asyncio, "sleep", new_callable=AsyncMock) as mock_sleep:
+        with pytest.raises(QueryTimeoutError) as excinfo:
+            await client._request_with_retry("GET", "/zeeker-judgements/judgments_fragments.json")
+
+    assert isinstance(excinfo.value, UpstreamCallFailed)
+    mock_sleep.assert_not_called()
+    assert len(httpx_mock.get_requests()) == 1
+
+
+async def test_vanilla_400_still_raises_upstream_call_failed(
+    httpx_mock: pytest_httpx.HTTPXMock, client: DatasetteClient
+) -> None:
+    """Vanilla 400 (no SQL-Interrupted marker) must still raise bare UpstreamCallFailed.
+
+    WR-260517-bki scope check: the new branch must fire ONLY for status 400
+    AND `body.get("title") == "SQL Interrupted"`. A 400 without the marker
+    (or with a different title) falls through to the existing catch-all.
+    """
+    httpx_mock.add_response(status_code=400, json={"error": "some other 400 reason"})
+
+    with patch.object(asyncio, "sleep", new_callable=AsyncMock) as mock_sleep:
+        with pytest.raises(UpstreamCallFailed) as excinfo:
+            await client._request_with_retry("GET", "/test.json")
+
+    assert not isinstance(excinfo.value, QueryTimeoutError)
+    mock_sleep.assert_not_called()
+    assert len(httpx_mock.get_requests()) == 1
+
+
+async def test_non_json_400_still_raises_upstream_call_failed(
+    httpx_mock: pytest_httpx.HTTPXMock, client: DatasetteClient
+) -> None:
+    """A 400 with a non-JSON body must NOT trip the SQL-Interrupted branch.
+
+    WR-260517-bki defensive guard: the `resp.json()` call inside the new
+    branch is wrapped in try/except so a non-JSON 400 body falls through to
+    the catch-all UpstreamCallFailed instead of bubbling JSONDecodeError.
+    """
+    httpx_mock.add_response(status_code=400, content=b"<html>Bad Request</html>")
+
+    with patch.object(asyncio, "sleep", new_callable=AsyncMock) as mock_sleep:
+        with pytest.raises(UpstreamCallFailed) as excinfo:
+            await client._request_with_retry("GET", "/test.json")
+
+    assert not isinstance(excinfo.value, QueryTimeoutError)
+    mock_sleep.assert_not_called()
+    assert len(httpx_mock.get_requests()) == 1
