@@ -1,49 +1,48 @@
-# mcp.zeeker.sg — block for the host-level Caddy on the zeeker server.
+# mcp.zeeker.sg — reference reverse-proxy block for the deployment.
 #
-# HOW TO DEPLOY
-# 1. Copy this block into the gitignored host Caddyfile (managed by the operator,
-#    not tracked in any repo).
-# 2. Reload the host Caddy: sudo systemctl reload caddy  (or equivalent)
+# This file shows the structural shape of the production reverse-proxy
+# configuration. Specific values (internal port, static-content paths, the
+# scraper User-Agent list) are operator-managed and not published here —
+# the deployed Caddyfile lives outside this repository.
 #
-# CLOUDFLARE: set mcp.zeeker.sg to DNS-only (grey cloud), not proxied.
-# Cloudflare's proxy can interfere with MCP's long-lived HTTP connections,
-# and orange-cloud would mask real client IPs from the rate limiter.
+# Contributors mirroring the deploy should adapt placeholders to their
+# environment.
 
 mcp.zeeker.sg {
-    # Block known AI scrapers — keep in sync with the data.zeeker.sg block.
-    @scrapers header_regexp User-Agent `meta-externalagent|meta-webindexer|facebookexternalhit|FacebookBot`
+    # Reject known automated scrapers by User-Agent. The operator maintains
+    # the actual regex list out-of-repo.
+    @scrapers header_regexp User-Agent `<SCRAPER_UA_REGEX>`
     respond @scrapers 403
 
-    # Phase 9 — public docs at /docs and privacy policy at /privacy.
-    # Static files served from /srv/mcp-zeeker-docs (populated by rsync of the
-    # `site/` directory built by `uv run mkdocs build --strict`).
-    # These handle blocks MUST appear before the reverse_proxy below so they
-    # intercept /docs* and /privacy* before traffic reaches the MCP container.
+    # Public docs and privacy policy are served as static files from a
+    # directory populated by `uv run mkdocs build --strict` + rsync. The
+    # static-file handlers must be declared BEFORE the reverse_proxy so
+    # they intercept /docs* and /privacy* before traffic reaches the app.
     handle /docs* {
-        root * /srv/mcp-zeeker-docs
+        root * <STATIC_DIR>
         try_files {path} {path}/index.html
         file_server
     }
 
     handle /privacy* {
-        root * /srv/mcp-zeeker-docs
+        root * <STATIC_DIR>
         try_files {path} {path}/index.html /privacy/index.html
         file_server
     }
 
-    # Starlette's Mount("/mcp") redirects exact /mcp → /mcp/ with 308.
-    # Rewrite here so clients that omit the trailing slash get a direct 200.
+    # The ASGI app mounts the MCP transport at /mcp/. Rewrite exact /mcp to
+    # /mcp/ so clients that omit the trailing slash get a direct 200 instead
+    # of a 308 redirect.
     @mcp_exact path /mcp
     rewrite @mcp_exact /mcp/
 
-    reverse_proxy 127.0.0.1:8002 {
-        # OVERWRITE (not append) X-Forwarded-For with the direct client IP.
-        # The MCP server's in-memory rate limiter reads ip_prefix from this
-        # header; an appended chain would let clients spoof it.
+    reverse_proxy <APP_HOST>:<APP_PORT> {
+        # Overwrite (not append) X-Forwarded-For with the direct client IP
+        # so the app can trust the source-IP value for rate limiting.
         header_up X-Forwarded-For {remote_host}
 
-        # Pass Origin through untouched. The OriginAllowlistMiddleware checks
-        # it to gate claude.ai / claude.com clients; Caddy must not strip it.
+        # Forward the Origin header untouched so the app's origin allowlist
+        # can evaluate it.
         header_up Origin {http.request.header.Origin}
     }
 }
