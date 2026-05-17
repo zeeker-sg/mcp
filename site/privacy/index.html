@@ -563,6 +563,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Privacy Policy
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -579,6 +597,91 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-data-collected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Data Collected
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-log-retention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Log Retention
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-third-party-data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Third-Party Data Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-cookies-and-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Cookies and Tracking
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-contact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Contact
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-jurisdiction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Jurisdiction
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -605,8 +708,95 @@
 
 
 <h1 id="privacy-policy">Privacy Policy<a class="headerlink" href="#privacy-policy" title="Permanent link">&para;</a></h1>
-<p><em>This page is populated in Task 2 of this plan.</em></p>
 <p><a href="../">Back to docs</a></p>
+<p><em>Last updated: 2026-05-17</em></p>
+<p>This privacy policy describes what data Zeeker MCP collects when you use the anonymous-tier
+MCP server at <code>mcp.zeeker.sg</code>. Zeeker is a read-only connector — it does not accept user
+registrations, store user data, or operate on behalf of callers beyond proxying requests to
+public Singapore legal datasets at <a href="https://data.zeeker.sg">data.zeeker.sg</a>.</p>
+<hr />
+<h2 id="1-data-collected">1. Data Collected<a class="headerlink" href="#1-data-collected" title="Permanent link">&para;</a></h2>
+<p>Each request to the MCP server generates one structured log line. The logged fields are exactly:</p>
+<table>
+<thead>
+<tr>
+<th>Field logged</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>request_id</code></td>
+<td>Random UUID generated per request; used to correlate log entries</td>
+</tr>
+<tr>
+<td><code>tool</code></td>
+<td>Name of the MCP tool called (e.g. <code>search</code>, <code>query_table</code>)</td>
+</tr>
+<tr>
+<td><code>database</code></td>
+<td>Database name requested (e.g. <code>pdpc</code>, <code>zeeker-judgements</code>)</td>
+</tr>
+<tr>
+<td><code>table</code></td>
+<td>Table name requested (e.g. <code>enforcement_decisions</code>)</td>
+</tr>
+<tr>
+<td><code>duration_ms</code></td>
+<td>Time in milliseconds from request receipt to response sent</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>HTTP response status code (e.g. <code>200</code>, <code>429</code>, <code>500</code>)</td>
+</tr>
+<tr>
+<td><code>ip_prefix</code></td>
+<td>First two octets of the caller's IP address (e.g. <code>203.0</code>) — not the full IP</td>
+</tr>
+<tr>
+<td><code>error_code</code></td>
+<td>Error code if the request failed (e.g. <code>rate_limited</code>, <code>unknown_table</code>)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>What is NOT logged:</strong></p>
+<ul>
+<li>Filter values (the content of <code>filters[*].value</code> parameters)</li>
+<li>Search query text (the <code>query</code> parameter to <code>search</code>)</li>
+<li>Full IP addresses (only the first two octets are retained)</li>
+<li>URLs passed to <code>fetch</code></li>
+<li>Column projection lists</li>
+<li>Any other user-supplied parameter values</li>
+</ul>
+<p>This design implements the no-echo guarantee from the server's injection-resistance posture:
+user-supplied values are not present in any stored or transmitted log data.</p>
+<hr />
+<h2 id="2-log-retention">2. Log Retention<a class="headerlink" href="#2-log-retention" title="Permanent link">&para;</a></h2>
+<p>Log lines are retained for <strong>30 days</strong> on a rolling basis. After 30 days, log entries are
+deleted. No log data is archived beyond this window.</p>
+<hr />
+<h2 id="3-third-party-data-flow">3. Third-Party Data Flow<a class="headerlink" href="#3-third-party-data-flow" title="Permanent link">&para;</a></h2>
+<p>All MCP tool calls are proxied to <code>data.zeeker.sg</code> (the upstream Datasette instance hosting
+the Singapore legal datasets). Requests are forwarded and responses are returned verbatim.</p>
+<ul>
+<li>No data is sent to third parties for analytics, advertising, or tracking purposes.</li>
+<li>No upstream request metadata is shared with any third party.</li>
+<li>Responses from <code>data.zeeker.sg</code> are <strong>not cached</strong> — each tool call is a fresh upstream
+  request. No retrieved data is stored on the Zeeker server.</li>
+</ul>
+<hr />
+<h2 id="4-cookies-and-tracking">4. Cookies and Tracking<a class="headerlink" href="#4-cookies-and-tracking" title="Permanent link">&para;</a></h2>
+<p>Zeeker MCP uses <strong>no cookies</strong>. There are no tracking pixels, session identifiers, analytics
+scripts, or user-tracking mechanisms of any kind. The server is stateless: no session state is
+maintained between requests.</p>
+<hr />
+<h2 id="5-contact">5. Contact<a class="headerlink" href="#5-contact" title="Permanent link">&para;</a></h2>
+<p>For privacy inquiries, contact: <strong>privacy@zeeker.sg</strong></p>
+<hr />
+<h2 id="6-jurisdiction">6. Jurisdiction<a class="headerlink" href="#6-jurisdiction" title="Permanent link">&para;</a></h2>
+<p>This server operates under <strong>Singapore law</strong>. The upstream datasets at <code>data.zeeker.sg</code> are
+also hosted in Singapore under Singapore law. Any disputes regarding this privacy policy are
+subject to the jurisdiction of the courts of Singapore.</p>
 
 
 
