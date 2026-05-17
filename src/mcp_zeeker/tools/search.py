@@ -42,7 +42,7 @@ from typing import Annotated
 import structlog
 from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import ToolAnnotations
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 
 from mcp_zeeker import config
 from mcp_zeeker.core.envelope import Envelope
@@ -59,6 +59,7 @@ from mcp_zeeker.core.visibility import (
     raise_unknown_database,
 )
 from mcp_zeeker.server import mcp
+from mcp_zeeker.tools._param_coercion import _coerce_json_list
 
 log = structlog.get_logger()
 
@@ -99,6 +100,7 @@ async def search(
     ],
     databases: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_json_list),
         Field(
             default=None,
             description=(
