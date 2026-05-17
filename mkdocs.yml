@@ -1,0 +1,39 @@
+site_name: Zeeker MCP
+site_url: https://mcp.zeeker.sg/docs
+site_description: Read-only MCP server exposing curated Singapore legal datasets from data.zeeker.sg
+repo_url: https://github.com/houfu/zeeker-mcp
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Tools: tools.md
+  - Error Catalog: errors.md
+  - Rate Limits: rate-limits.md
+  - Envelope: envelope.md
+  - Injection Resistance: injection-resistance.md
+  - Privacy Policy: privacy.md
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
