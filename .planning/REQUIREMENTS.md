@@ -118,20 +118,20 @@
 
 ### Non-Functional (NFR)
 
-- [ ] **NFR-01**: p50 latency < 300ms, p95 < 1.5s for non-fragment tools (server-side measurement)
-- [ ] **NFR-02**: 50 concurrent requests handled in a single process without saturation
-- [ ] **NFR-03**: Resident memory < 256 MB under steady load
-- [ ] **NFR-04**: Dependency footprint small and audited (6 runtime deps + ~4 dev deps): FastMCP, httpx, starlette, uvicorn, pydantic, structlog
-- [ ] **NFR-05**: TLS terminated upstream (operator concern); deployment README documents Anthropic IP-allowlist requirement
+- [x] **NFR-01**: p50 latency < 300ms, p95 < 1.5s for non-fragment tools (server-side measurement)
+- [x] **NFR-02**: 50 concurrent requests handled in a single process without saturation
+- [x] **NFR-03**: Resident memory < 256 MB under steady load
+- [x] **NFR-04**: Dependency footprint small and audited (6 runtime deps + ~4 dev deps): FastMCP, httpx, starlette, uvicorn, pydantic, structlog
+- [x] **NFR-05**: TLS terminated upstream (operator concern); deployment README documents Anthropic IP-allowlist requirement
 
 ### Testing (TEST)
 
-- [ ] **TEST-01**: Unit tests cover filter mapping (all 11 operators), envelope shape, hidden-table/column enforcement, fragment-parent join behavior, rate-limit burst/sustained/daily windows, error code mapping, cursor binding (qhash mismatch rejection)
-- [ ] **TEST-02**: Live integration tests against `data.zeeker.sg` gated by `ZEEKER_LIVE=1` env flag; run nightly and pre-release
-- [ ] **TEST-03**: Snapshot tests per tool verify: `set(row.keys()) ∩ HEAVY_COLUMNS == ∅`; `set(row["retrieved_content"].keys()) ⊆ HEAVY_COLUMNS`
-- [ ] **TEST-04**: Regression test for the 1,000-row truncation cap using a synthetic 1,500-fragment parent
-- [ ] **TEST-05**: 24h soak under synthetic load validates stable memory, no pool-timeout cascade, log growth bounded, daily-rate-limit rollover correct
-- [ ] **TEST-06**: Hostile-input test corpus exercises filter-value-echo paths (canary tokens, malformed UTF-8, FTS5 operators in user input)
+- [x] **TEST-01**: Unit tests cover filter mapping (all 11 operators), envelope shape, hidden-table/column enforcement, fragment-parent join behavior, rate-limit burst/sustained/daily windows, error code mapping, cursor binding (qhash mismatch rejection)
+- [x] **TEST-02**: Live integration tests against `data.zeeker.sg` gated by `ZEEKER_LIVE=1` env flag; run nightly and pre-release
+- [x] **TEST-03**: Snapshot tests per tool verify: `set(row.keys()) ∩ HEAVY_COLUMNS == ∅`; `set(row["retrieved_content"].keys()) ⊆ HEAVY_COLUMNS`
+- [x] **TEST-04**: Regression test for the 1,000-row truncation cap using a synthetic 1,500-fragment parent
+- [x] **TEST-05**: 24h soak under synthetic load validates stable memory, no pool-timeout cascade, log growth bounded, daily-rate-limit rollover correct
+- [x] **TEST-06**: Hostile-input test corpus exercises filter-value-echo paths (canary tokens, malformed UTF-8, FTS5 operators in user input)
 
 ### Submission (SUB)
 

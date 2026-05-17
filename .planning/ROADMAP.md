@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 6: Envelope hardening + injection-resistance labelling** - Single EnvelopeBuilder is the only emission path; every tool description ends with the fixed safety trailer
 - [x] **Phase 6.1: Envelope hardening gap closure (INSERTED)** - Fix 4 manual-UAT findings on top of Phase 6: cold-cache license fallback, transparent citation-column augmentation, mlaw_news heavy-column upstream call, and live drift probe drift (completed 2026-05-14)
 - [ ] **Phase 7: Rate limit + structured errors + healthz + logs** - 20-burst/60-min/5k-24h token bucket; locked error catalog; liveness-only `/healthz`; structured JSON access logs
-- [ ] **Phase 8: Full tests + 24h soak** - Filter/envelope/hidden/fragment/rate-limit/error unit coverage; gated live tests against `data.zeeker.sg`; 24h soak validates p95, memory, log growth
+- [x] **Phase 8: Full tests + 24h soak** - Filter/envelope/hidden/fragment/rate-limit/error unit coverage; gated live tests against `data.zeeker.sg`; 24h soak validates p95, memory, log growth (completed 2026-05-17)
 - [ ] **Phase 9: Submission PR to anthropics/claude-for-legal** - Public docs, privacy policy, README with 3 use cases + injection-resistance writeup, `.mcp.json` entry mimicking an existing merged entry character-for-character
 
 ## Phase Details
@@ -249,5 +249,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Envelope hardening + injection-resistance labelling | 0/3 | Not started | - |
 | 6.1. Envelope hardening gap closure | 1/1 | Complete    | 2026-05-14 |
 | 7. Rate limit + structured errors + healthz + logs | 6/6 | Gaps Found  | 2026-05-15 |
-| 8. Full tests + 24h soak | 0/6 | Planned     | - |
+| 8. Full tests + 24h soak | 6/6 | Complete    | 2026-05-17 |
 | 9. Submission PR to anthropics/claude-for-legal | 0/TBD | Not started | - |

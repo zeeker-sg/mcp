@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: phase_8_pending_uat_1
-stopped_at: "Phase 8 HUMAN-UAT #1 (24h soak) — pending operator-side SOAK_BYPASS_TOKEN rotation on prod container; HUMAN-UAT #2 (live tests) passed 11/11 locally 2026-05-17"
-last_updated: "2026-05-17T00:38:21.000Z"
-last_activity: 2026-05-17 -- HUMAN-UAT #2 passed 11/11 locally; HUMAN-UAT #1 awaiting SOAK_BYPASS_TOKEN rotation
+status: ready_to_plan
+stopped_at: Phase 8 complete (6/6) — ready to discuss Phase 9
+last_updated: 2026-05-17T00:11:21.018Z
+last_activity: 2026-05-17 -- Phase 8 complete (UAT 1+1, security audit SECURED 0/32 open); ready to plan Phase 9
 progress:
   total_phases: 10
   completed_phases: 10
@@ -18,27 +18,27 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-14)
+See: .planning/PROJECT.md (updated 2026-05-17)
 
 **Core value:** Every successful response is citation-ready, scope-bounded, and safe to feed back into an LLM — provenance attached, hidden internal data stripped, retrieved third-party text labeled as data rather than instructions.
-**Current focus:** Phase 08 — full-tests-24h-soak
+**Current focus:** Phase 9 — submission pr to anthropics/claude for legal
 
 ## Current Position
 
 Phase: 9
 Plan: Not started
-Status: Phase 8 awaiting HUMAN-UAT #1 (24h soak)
-Last activity: 2026-05-17 - Completed quick task 260517-0s5: HUMAN-UAT #2 passed 11/11 locally; HUMAN-UAT #1 awaiting SOAK_BYPASS_TOKEN rotation
+Status: Ready to plan
+Last activity: 2026-05-17
 
-**Resume:** Phase 8 has one remaining gate — HUMAN-UAT #1 (24h soak). It is blocked on operator-side rotation of `SOAK_BYPASS_TOKEN`: the value held by the GitHub Actions repo secret does not match the value baked into the production container's env, so the last dispatch (2026-05-16 12:59 UTC, GitHub Actions run id 25962546108) failed at preflight with HTTP 404 on `/admin/metrics`. Unblock by re-syncing the token in both places (regenerate or copy the existing GH secret value into the prod container's env_file), restarting the prod container, re-triggering `soak.yml` via workflow_dispatch on the Actions UI, then running `/gsd-verify-work 8`. HUMAN-UAT #2 (live tests vs `data.zeeker.sg`) passed 11/11 locally on 2026-05-17 — evidence in `.planning/phases/08-full-tests-24h-soak/08-HUMAN-UAT.md`.
+**Resume:** Phase 8 is complete. UAT closed with 1 passed (live tests 11/11) and 1 stability_passed_latency_breached (soak ran the full 5h30m window; stability gates green — RSS 102.7 MB, 0 PoolTimeout, 0.031% error rate; latency budget decomposed cleanly via low-concurrency probe into cheap-tools-within-budget + expensive-fan-out-tools-structurally-above-budget). Security audit SECURED with 0/32 threats open. Two operator items remain post-close, neither blocking Phase 9: (1) unset `SOAK_BYPASS_TOKEN` on the prod container + restart so the bypass surface is closed in steady state; (2) decide on PRD latency budget split (per-tool category recommended — search/fragments are intrinsically multi-RTT) vs. additional upstream Datasette capacity. Next: `/gsd-plan-phase 9` (Phase 9 is flagged for `/gsd-research-phase` first per the Blockers/Concerns list — `.mcp.json` character-for-character mimicry of an existing merged entry).
 
-Progress: [██████████████░░░░░░] 24/25 plans (96%) — milestone v1.0 covers phases 1–9 plus 6.1 insertion
+Progress: [████████████████████] 38/38 plans (100%) — milestone v1.0 covers phases 1–9 plus 6.1 insertion; phase 8 closed, phase 9 pending
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 35 (across phases 1–3)
+- Total plans completed: 41 (across phases 1–3)
 - Average duration: —
 - Total execution time: — hours
 
@@ -101,6 +101,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-17T00:38:21.000Z
-Stopped at: Phase 8 HUMAN-UAT #1 (24h soak) — pending operator-side SOAK_BYPASS_TOKEN rotation on prod container; HUMAN-UAT #2 (live tests) passed 11/11 locally 2026-05-17
-Resume file: .planning/phases/08-full-tests-24h-soak/08-HUMAN-UAT.md
+Last session: 2026-05-17T06:50:00Z
+Stopped at: Phase 8 complete (6/6 plans, UAT closed, security SECURED 0/32); ready to plan Phase 9
+Resume file: None
