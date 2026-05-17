@@ -23,7 +23,7 @@ URLS=(
 
 fail=0
 for url in "${URLS[@]}"; do
-  status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$url" || echo "000")
+  status=$(curl -sL -o /dev/null -w "%{http_code}" --max-time 10 "$url" || echo "000")
   if [[ "$status" != "200" ]]; then
     echo "FAIL: $url returned HTTP $status"
     fail=1
