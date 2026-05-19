@@ -6,8 +6,6 @@
 name: Live Tests
 
 on:
-  schedule:
-    - cron: "0 2 * * *"  # 02:00 UTC nightly
   workflow_dispatch:
 
 jobs:
