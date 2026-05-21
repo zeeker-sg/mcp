@@ -38,6 +38,35 @@ configure_logging()
 mcp_app = mcp.http_app(path="/", stateless_http=True)
 
 
+async def _mcp_get_status(scope, receive, send):
+    """ASGI handler for GET /mcp/ — returns lightweight status JSON.
+
+    Some MCP client libraries probe the endpoint with GET before POSTing
+    tool requests (discovery/health check). FastMCP's http_app 405s GET,
+    which is noisy in logs and triggers false error-rate alerts. This
+    wrapper returns a minimal 200 without interfering with POSTs.
+    """
+    await send({
+        "type": "http.response.start",
+        "status": 200,
+        "headers": [(b"content-type", b"application/json")],
+    })
+    body = b'{"status":"ok","protocol":"2025-06-18","name":"zeeker"}'
+    await send({"type": "http.response.body", "body": body})
+
+
+async def mcp_wrapper(scope, receive, send):
+    """Wrap the FastMCP app to intercept GET at the mount root.
+
+    Mount("/mcp", app=...) strips the prefix, so the inner app sees
+    path="/". We handle GET / here; everything else passes through.
+    """
+    if scope["type"] == "http" and scope["method"] == "GET" and scope["path"] == "/":
+        await _mcp_get_status(scope, receive, send)
+        return
+    await mcp_app(scope, receive, send)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: Starlette):
     """
@@ -102,7 +131,7 @@ app = Starlette(
         # /admin/metrics — soak-token-gated RSS read-out; returns 404 when
         # unauthenticated (no surface). See core/admin.py.
         Route("/admin/metrics", admin_metrics),
-        Mount("/mcp", app=mcp_app),
+        Mount("/mcp", app=mcp_wrapper),
     ],
     middleware=[
         # Outermost first. Request-ID binds the contextvar so subsequent
