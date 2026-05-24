@@ -1,7 +1,7 @@
 site_name: Zeeker MCP
 site_url: https://mcp.zeeker.sg/docs
 site_description: Read-only MCP server exposing curated Singapore legal datasets from data.zeeker.sg
-repo_url: https://github.com/houfu/zeeker-mcp
+repo_url: https://github.com/zeeker-sg/mcp
 docs_dir: docs
 site_dir: site
 
