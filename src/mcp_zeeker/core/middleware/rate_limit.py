@@ -144,6 +144,14 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # Loopback bypass: health checks from Caddy/Docker on the host loopback
+        # must not consume rate-limit tokens or pollute the bucket store. Loopback
+        # cannot be spoofed from the internet, so this is safe (T-07-04).
+        ip = client_ip_from_scope(scope, self._depth)
+        if ip == "127.0.0.1" or ip == "::1":
+            await self.app(scope, receive, send)
+            return
+
         perf_start = time.perf_counter()
         now_mono = self._time_provider()
         now_utc = datetime.now(tz=UTC)
@@ -154,7 +162,6 @@ class RateLimitMiddleware:
             self._sweep(now_mono, now_utc)
             self._last_sweep_ts = now_mono
 
-        ip = client_ip_from_scope(scope, self._depth)
         key = _normalize_ip_key(ip) or "_unknown"
 
         allowed, retry_after = self._check_bucket(key, now_mono, now_utc)
