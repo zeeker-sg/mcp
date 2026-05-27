@@ -22,6 +22,34 @@ uv run uvicorn mcp_zeeker.app:app --reload --port 8000
 Then point a Claude client (Claude Desktop or Claude Code) at `http://127.0.0.1:8000/mcp`
 for in-development testing. Production uses `https://mcp.zeeker.sg/mcp`.
 
+## Stable server identifier
+
+The server reports `serverInfo.name = "zeeker"` during the MCP `initialize` handshake.
+This name is stable across releases and reconnections. Hosts that use the canonical name
+as the tool-prefix should expose tools as:
+
+- `mcp__zeeker__query_table`
+- `mcp__zeeker__search`
+- `mcp__zeeker__fetch`
+- `mcp__zeeker__list_databases`
+- `mcp__zeeker__list_tables`
+- `mcp__zeeker__describe_table`
+
+If a host exposes these tools under a different prefix (e.g. a UUID), that is a host-side
+routing issue, not a zeeker-side change. Downstream code that hard-codes tool names should
+rely on the `zeeker` prefix above and treat UUID prefixes as host bugs.
+
+**Published tools (stable names):**
+
+| Tool | Purpose |
+|------|---------|
+| `query_table` | Query a table with filters, sort, and pagination |
+| `search` | Full-text search across databases |
+| `fetch` | Fetch a specific row by URL |
+| `list_databases` | List available databases |
+| `list_tables` | List tables in a database |
+| `describe_table` | Describe columns and schema for a table |
+
 ## Use cases
 
 Zeeker is designed for Claude agents using the `regulatory-legal` plugin — a workflow focused
