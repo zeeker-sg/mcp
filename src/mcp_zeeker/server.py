@@ -25,3 +25,4 @@ mcp.add_middleware(StructuredLogMiddleware())
 # These imports MUST run before mcp.http_app() is called.
 # Plan 04 overwrites the placeholder tool files with real implementations.
 from mcp_zeeker.tools import discovery, retrieval, search  # noqa: F401, E402
+from mcp_zeeker import prompts  # noqa: F401, E402
