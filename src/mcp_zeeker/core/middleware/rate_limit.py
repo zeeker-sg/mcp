@@ -44,6 +44,7 @@
 #   request_id; scope.body is never read before the 429 fires (INJ-05).
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import time
@@ -60,6 +61,17 @@ from mcp_zeeker.core.ip import _normalize_ip_key, client_ip_from_scope
 from mcp_zeeker.core.soak_auth import is_soak_authenticated
 
 logger = structlog.get_logger()
+
+
+def _is_loopback_ip(ip: str) -> bool:
+    """Return True if ip is in the IPv4 loopback range (127.0.0.0/8) or IPv6 ::1."""
+    if ip == "::1":
+        return True
+    try:
+        addr = ipaddress.ip_address(ip)
+        return addr.is_loopback
+    except ValueError:
+        return False
 
 
 @dataclass
@@ -148,7 +160,7 @@ class RateLimitMiddleware:
         # must not consume rate-limit tokens or pollute the bucket store. Loopback
         # cannot be spoofed from the internet, so this is safe (T-07-04).
         ip = client_ip_from_scope(scope, self._depth)
-        if ip == "127.0.0.1" or ip == "::1":
+        if _is_loopback_ip(ip):
             await self.app(scope, receive, send)
             return
 

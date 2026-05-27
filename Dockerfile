@@ -53,5 +53,5 @@ CMD ["uvicorn", "mcp_zeeker.app:app", "--host", "0.0.0.0", "--port", "8000", "--
 
 # Operator-visible health: docker compose shows healthy/unhealthy; Caddy startup
 # probe can also poll this endpoint.
-HEALTHCHECK --interval=10s --timeout=2s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=60s --timeout=2s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()" || exit 1

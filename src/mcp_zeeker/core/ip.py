@@ -87,7 +87,19 @@ def client_ip_from_scope(scope: dict, depth: int) -> str:
     }
     xff = headers.get("x-forwarded-for", "")
     if xff:
-        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        # Strip optional port (e.g. "1.2.3.4:80" → "1.2.3.4", "[::1]:8080" → "::1")
+        raw_parts = [p.strip() for p in xff.split(",") if p.strip()]
+        parts: list[str] = []
+        for rp in raw_parts:
+            if rp.startswith("["):
+                # IPv6 bracket notation — strip brackets and trailing "]:port"
+                end = rp.find("]")
+                parts.append(rp[1:end] if end != -1 else rp)
+            elif ":" in rp:
+                # IPv4 with port — drop everything after last colon
+                parts.append(rp.rsplit(":", 1)[0])
+            else:
+                parts.append(rp)
         # parts = [client, proxy1, proxy2, ...]; rightmost depth entries are trusted.
         # With depth=1 and a single Caddy hop that has overwritten XFF, parts ==
         # [client_ip] and we return parts[0].

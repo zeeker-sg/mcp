@@ -39,7 +39,9 @@ mcp.zeeker.sg {
     reverse_proxy <APP_HOST>:<APP_PORT> {
         # Overwrite (not append) X-Forwarded-For with the direct client IP
         # so the app can trust the source-IP value for rate limiting.
-        header_up X-Forwarded-For {remote_host}
+        # Use {remote_ip} (raw IP) rather than {remote_host} (reverse-DNS
+        # hostname) to avoid accidental hostname strings in the header.
+        header_up X-Forwarded-For {remote_ip}
 
         # Forward the Origin header untouched so the app's origin allowlist
         # can evaluate it.
