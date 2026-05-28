@@ -25,30 +25,20 @@ for in-development testing. Production uses `https://mcp.zeeker.sg/mcp`.
 ## Stable server identifier
 
 The server reports `serverInfo.name = "zeeker"` during the MCP `initialize` handshake.
-This name is stable across releases and reconnections. Hosts that use the canonical name
-as the tool-prefix should expose tools as:
+This name is stable across releases and reconnections. Downstream code should hard-code
+the `mcp__zeeker__` prefix; if a host exposes tools under a different prefix (e.g. a UUID),
+that is a host-side routing issue, not a zeeker-side change.
 
-- `mcp__zeeker__query_table`
-- `mcp__zeeker__search`
-- `mcp__zeeker__fetch`
-- `mcp__zeeker__list_databases`
-- `mcp__zeeker__list_tables`
-- `mcp__zeeker__describe_table`
+**Published tools:**
 
-If a host exposes these tools under a different prefix (e.g. a UUID), that is a host-side
-routing issue, not a zeeker-side change. Downstream code that hard-codes tool names should
-rely on the `zeeker` prefix above and treat UUID prefixes as host bugs.
-
-**Published tools (stable names):**
-
-| Tool | Purpose |
-|------|---------|
-| `query_table` | Query a table with filters, sort, and pagination |
-| `search` | Full-text search across databases |
-| `fetch` | Fetch a specific row by URL |
-| `list_databases` | List available databases |
-| `list_tables` | List tables in a database |
-| `describe_table` | Describe columns and schema for a table |
+| Tool | Canonical MCP name | Purpose |
+|------|--------------------|---------|
+| `query_table` | `mcp__zeeker__query_table` | Query a table with filters, sort, and pagination |
+| `search` | `mcp__zeeker__search` | Full-text search across databases |
+| `fetch` | `mcp__zeeker__fetch` | Fetch a specific row by URL |
+| `list_databases` | `mcp__zeeker__list_databases` | List available databases |
+| `list_tables` | `mcp__zeeker__list_tables` | List tables in a database |
+| `describe_table` | `mcp__zeeker__describe_table` | Describe columns and schema for a table |
 
 ## Use cases
 
