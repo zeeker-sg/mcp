@@ -8,6 +8,17 @@ import httpx
 from mcp_zeeker import config
 
 
+def build_headers() -> dict[str, str]:
+    """Upstream request headers. Adds the owner full-access bearer token
+    (UPSTREAM_TOKEN) when configured so the upstream strip-columns
+    lockdown exempts this server — without it, heavy-column retrieval
+    gets stripped JSON and 403'd CSV/FTS endpoints."""
+    headers = {"User-Agent": config.USER_AGENT}
+    if config.UPSTREAM_TOKEN:
+        headers["Authorization"] = f"Bearer {config.UPSTREAM_TOKEN}"
+    return headers
+
+
 def build_http_client() -> httpx.AsyncClient:
     """Single factory so tests can swap it for an ASGITransport-backed client."""
     return httpx.AsyncClient(
@@ -21,5 +32,5 @@ def build_http_client() -> httpx.AsyncClient:
             max_keepalive_connections=20,
             keepalive_expiry=30.0,
         ),
-        headers={"User-Agent": config.USER_AGENT},
+        headers=build_headers(),
     )

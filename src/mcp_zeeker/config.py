@@ -421,6 +421,16 @@ CITATION_TEMPLATES: dict[tuple[str, str], str] = {
 UPSTREAM_URL: str = os.getenv("UPSTREAM_URL", "http://datasette:8001")
 USER_AGENT: str = os.getenv("USER_AGENT", "mcp-zeeker/0.1")
 
+# Owner full-access token for the upstream catalogue lockdown
+# (zeeker-datasette plugins/strip_columns.py). When set, every upstream
+# request carries "Authorization: Bearer <token>" and receives full,
+# unstripped content — required for the heavy-column retrieval path
+# (HEAVY_COLUMNS), which the public anonymous tier of data.zeeker.sg
+# strips or 403s. Empty (default) → anonymous catalogue access only.
+# The MCP server's own response envelope still applies its hidden-data
+# stripping and content-license policy on top.
+UPSTREAM_TOKEN: str = os.getenv("ZEEKER_FULL_ACCESS_TOKEN", "")
+
 # ---------------------------------------------------------------------------
 # Injection resistance — PRD §10, INJ-01
 # ---------------------------------------------------------------------------

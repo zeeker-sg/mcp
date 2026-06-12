@@ -11,6 +11,11 @@ services:
     environment:
       UPSTREAM_URL: http://zeeker-datasette:8001
       USER_AGENT: mcp-zeeker/0.1
+      # Owner full-access token shared with the zeeker-datasette stack
+      # (same env var name there). Grants this server full, unstripped
+      # upstream content past the strip-columns catalogue lockdown.
+      # Set in the host .env; empty → anonymous-tier (stripped) access.
+      ZEEKER_FULL_ACCESS_TOKEN: ${ZEEKER_FULL_ACCESS_TOKEN:-}
     ports:
       - "127.0.0.1:8002:8000"
     networks: [zeeker-datasette_default]
