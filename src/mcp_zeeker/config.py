@@ -496,6 +496,20 @@ LOG_FIELDS: tuple[str, ...] = (
     "error_code",
 )
 
+# Locked field set for the `session_start` event emitted by SessionLogMiddleware
+# on every MCP `initialize` handshake (#5). Kept distinct from LOG_FIELDS so the
+# tool_call schema test stays independent and each event is auditable on its own.
+# Pseudonymous-only: software client identity (protocol_version + client_name +
+# client_version) plus the request_id / ip_prefix already bound to contextvars.
+# NEVER a user identity, NEVER a full IP, NEVER tool args.
+SESSION_START_FIELDS: tuple[str, ...] = (
+    "request_id",
+    "ip_prefix",
+    "protocol_version",
+    "client_name",
+    "client_version",
+)
+
 # ---------------------------------------------------------------------------
 # Phase 3 — retrieval defaults (D3-17, CFG-01/02)
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 [Back to docs](index.md)
 
-*Last updated: 2026-05-17*
+*Last updated: 2026-06-14*
 
 This privacy policy describes what data Zeeker MCP collects when you use the anonymous-tier
 MCP server at `mcp.zeeker.sg`. Zeeker is a read-only connector — it does not accept user
@@ -37,6 +37,24 @@ Each request to the MCP server generates one structured log line. The logged fie
 
 This design implements the no-echo guarantee from the server's injection-resistance posture:
 user-supplied values are not present in any stored or transmitted log data.
+
+### 1.1 Session-start event
+
+Once per MCP `initialize` handshake, the server emits a single additional structured log
+line (event `session_start`) so it can count connection handshakes. The logged fields are
+exactly:
+
+| Field logged | Description |
+|--------------|-------------|
+| `request_id` | Random UUID generated per request; used to correlate log entries |
+| `ip_prefix` | Truncated IP prefix (same `/24` IPv4 / `/48` IPv6 truncation as above — never the full IP) |
+| `protocol_version` | MCP protocol version advertised by the client (e.g. `2025-06-18`) |
+| `client_name` | Software client identity from the handshake (e.g. `claude-ai`, `mcp-remote`) |
+| `client_version` | Software client version string from the handshake |
+
+This line records **software** client identity only — the name and version of the MCP client
+program. It is **not** a user identity, account, or session token, and contains no full IP
+address and no tool arguments. It is emitted exactly once per `initialize` handshake.
 
 ---
 
@@ -75,9 +93,10 @@ the Singapore legal datasets). Requests are forwarded and responses are returned
 Zeeker MCP uses **no cookies**. There are no tracking pixels, analytics scripts, or
 user-tracking mechanisms of any kind. The server holds no user-identifying session state.
 
-The MCP streamable-HTTP transport may emit a protocol-level `mcp-session-id` header during
-the connection handshake; this identifier is scoped to a single transport session, is not
-tied to any user identity or account, and is not retained after the connection ends.
+The server runs in stateless HTTP mode and does **not** mint a protocol-level
+`mcp-session-id` header; no per-connection session token is issued or retained. The
+`session_start` event described in §1.1 records only software client identity (name and
+version), never a user identity or account.
 
 ---
 

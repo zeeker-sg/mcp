@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import types
 
 import structlog
 from structlog.testing import capture_logs
@@ -19,6 +20,7 @@ from mcp_zeeker import config
 from mcp_zeeker.core.ip import ip_prefix
 from mcp_zeeker.core.logging import bind_request, clear_request
 from mcp_zeeker.core.middleware.request_id import _REQUEST_ID_PATTERN
+from mcp_zeeker.core.middleware.session_log import SessionLogMiddleware
 
 
 def test_log_fields_locked_to_config():
@@ -47,6 +49,67 @@ def test_log_fields_locked_to_config():
     allowed_keys = set(config.LOG_FIELDS) | {"event", "log_level", "level", "timestamp"}
     extra_keys = set(line.keys()) - allowed_keys
     assert extra_keys == set(), f"Unexpected keys in log line: {extra_keys!r}. Full line: {line!r}"
+
+
+def test_session_start_fields_locked_to_config():
+    """#5: session_start log line carries no keys beyond SESSION_START_FIELDS + meta."""
+    bind_request("session-locked-test", "10.0.0")
+    try:
+        with capture_logs(processors=[structlog.contextvars.merge_contextvars]) as cap:
+            structlog.get_logger().info(
+                "session_start",
+                protocol_version="2025-06-18",
+                client_name="claude-ai",
+                client_version="1.0.0",
+            )
+    finally:
+        clear_request()
+
+    assert cap, "No log lines captured"
+    line = cap[0]
+
+    allowed_keys = set(config.SESSION_START_FIELDS) | {"event", "log_level", "level", "timestamp"}
+    extra_keys = set(line.keys()) - allowed_keys
+    assert extra_keys == set(), f"Unexpected keys in log line: {extra_keys!r}. Full line: {line!r}"
+
+
+async def test_session_start_middleware_emits_clientinfo():
+    """#5: SessionLogMiddleware.on_initialize emits a session_start line with
+    the software client identity from initialize params, and tolerates a
+    missing clientInfo without raising."""
+
+    async def call_next(_context):
+        return None
+
+    # clientInfo present.
+    params = types.SimpleNamespace(
+        protocolVersion="2025-06-18",
+        clientInfo=types.SimpleNamespace(name="claude-ai", version="1.2.3"),
+    )
+    context = types.SimpleNamespace(message=types.SimpleNamespace(params=params))
+
+    with capture_logs() as cap:
+        await SessionLogMiddleware().on_initialize(context, call_next)
+
+    assert cap, "No session_start log line captured"
+    line = cap[0]
+    assert line["event"] == "session_start"
+    assert line["protocol_version"] == "2025-06-18"
+    assert line["client_name"] == "claude-ai"
+    assert line["client_version"] == "1.2.3"
+
+    # clientInfo absent — must not raise; identity keys fall back to None.
+    params_no_info = types.SimpleNamespace(protocolVersion="2025-06-18", clientInfo=None)
+    context_no_info = types.SimpleNamespace(message=types.SimpleNamespace(params=params_no_info))
+    with capture_logs() as cap2:
+        await SessionLogMiddleware().on_initialize(context_no_info, call_next)
+
+    assert cap2, "No session_start log line captured when clientInfo absent"
+    line2 = cap2[0]
+    assert line2["event"] == "session_start"
+    assert line2["protocol_version"] == "2025-06-18"
+    assert line2["client_name"] is None
+    assert line2["client_version"] is None
 
 
 async def test_request_id_propagates_across_async_tasks():
