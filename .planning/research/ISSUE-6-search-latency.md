@@ -115,3 +115,34 @@ Handler Step 5 re-fetches columns via `_visible_columns(db, table)` **per table*
 1. **Stage-1 split — separate fields vs one event?** `search` sub-timings (`discovery_ms`/`fan_out_ms`/`post_filter_ms`) are search-only; binding them onto the shared `tool_call` line means other tools log nulls for them. Decide: extra optional fields on `tool_call`, or a separate `search_timing` event. (Mirrors the #5 `LOG_FIELDS` locked-tuple tension — there's a test asserting the `tool_call` field set.)
 2. **TTL value** — 1800s (match MetadataCache) vs shorter for fresher FTS discovery. Operational call.
 3. **Cache scope** — extend `MetadataCache` to also hold `/{db}.json`, or a dedicated `DatabaseSummaryCache`? Dedicated is cleaner (different endpoint, different shape); decide before coding.
+
+---
+
+## 8. Update 2026-06-14 — expanded levers, Lever-4 feasibility, subissue split
+
+After a brainstorm, the approaches group into six levers: **do less** (memoize, thread columns, collapse the two discovery passes), **reuse** (TTL cache, stale-while-revalidate, startup warm), **parallelize** (concurrent discovery), **cheaper-per-call** (count-free / SQL discovery — "Lever 4"), **move off hot path** (background-refreshed catalogue, or a generated static manifest), and **bound the damage** (a discovery deadline; today only fan-out is budgeted).
+
+### Lever 4 feasibility — does Datasette support a cheaper discovery call?
+**The software supports it (confirmed via Datasette docs).** Instance enablement on `data.zeeker.sg` is the only remaining unknown.
+
+- **Arbitrary SQL over HTTP, JSON out — supported.** `/{db}/-/query.json?sql=…`, gated by the `execute-sql` permission (on by default in vanilla Datasette). One `select name, sql from sqlite_master where type='table'` per DB returns table names + DDL (columns derivable; FTS detectable via the `USING fts5` clause) in a single cheap query, bypassing the `/{db}.json` table-enumeration / `count(*)` cost.
+- **`?_nocount=1` — supported** (documented to disable full result counts); `?_size=` controls page size. Attacks the `count(*)` cost directly.
+- **Hard constraint:** whatever replaces `/{db}.json` must still yield `fts_table` + `columns` + `hidden`, which `DatabaseSummary` parses. The `sqlite_master` route reconstructs these but is real work.
+- **Cannot be verified from the dev sandbox:** the environment's egress allowlist blocks `data.zeeker.sg`, and the anonymous tier 403s the catalogue endpoints anyway — the probe needs the owner token + network, i.e. the prod host / MCP container.
+- **Net:** Lever 4 went from "is it even possible?" (yes) to "is `execute-sql` enabled for our token, and is it actually faster here?" — a ~15-minute measurement, not a design unknown. Sources: docs.datasette.io JSON API / Running SQL queries / Pages and API endpoints.
+
+Probe runbook (run on the prod host, which has network + `ZEEKER_FULL_ACCESS_TOKEN`):
+```bash
+B=https://data.zeeker.sg ; H="Authorization: Bearer $ZEEKER_FULL_ACCESS_TOKEN"
+for i in 1 2 3; do curl -s -H "$H" -o /dev/null -w "base t=%{time_total}s sz=%{size_download}\n" "$B/sg-gov-newsrooms.json"; done
+curl -s -H "$H" -o /dev/null -w "nocount t=%{time_total}s\n" "$B/sg-gov-newsrooms.json?_nocount=1"
+curl -s -H "$H" -w "\nsql t=%{time_total}s\n" "$B/sg-gov-newsrooms/-/query.json?sql=select+name,sql+from+sqlite_master+where+type='table'" | head -c 400
+```
+
+### Subissue split (created 2026-06-14)
+#6 is now a tracking parent with three subissues on the path to green:
+- **#8 — [#6a]** instrument search sub-timings (`discovery_ms`/`fan_out_ms`/`post_filter_ms`) — ships first, no deps.
+- **#9 — [#6b]** eliminate redundant `get_database` calls (request memoization + thread columns).
+- **#10 — [#6c]** cache `get_database` (single-flight TTL or background catalogue).
+
+Lever 4 (cheaper-per-call) is held as a deferred **measurement spike** — not filed — because #6c may make discovery cost ~0 regardless. The discovery-deadline "bound the damage" idea is also unfiled; worth adding as insurance whenever #6c lands.
