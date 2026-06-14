@@ -7,6 +7,7 @@ from fastmcp import FastMCP
 from mcp_zeeker.core.middleware.access_log import StructuredLogMiddleware
 from mcp_zeeker.core.middleware.error_enrichment import ErrorEnrichmentMiddleware
 from mcp_zeeker.core.middleware.retrieved_at import RetrievedAtMiddleware
+from mcp_zeeker.core.middleware.session_log import SessionLogMiddleware
 
 mcp = FastMCP(name="zeeker", version="0.1.0")
 # MUST be the FIRST mcp.add_middleware() call — Phase 6 D6-09 / D6-10 /
@@ -20,6 +21,10 @@ mcp.add_middleware(RetrievedAtMiddleware())
 # RetrievedAt so retrieved_at stays bound during error handling.
 mcp.add_middleware(ErrorEnrichmentMiddleware())
 mcp.add_middleware(StructuredLogMiddleware())
+# Emits the `session_start` handshake event on every MCP initialize (#5).
+# request_id/ip_prefix are bound at the ASGI layer, so ordering among these
+# does not affect their availability in the log line.
+mcp.add_middleware(SessionLogMiddleware())
 
 # Tool modules register themselves on import via @mcp.tool decorator.
 # These imports MUST run before mcp.http_app() is called.

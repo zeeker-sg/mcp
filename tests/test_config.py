@@ -68,6 +68,9 @@ def test_constants_present():
     assert hasattr(config, "LOG_FIELDS")
     assert isinstance(config.LOG_FIELDS, tuple)
 
+    assert hasattr(config, "SESSION_START_FIELDS")
+    assert isinstance(config.SESSION_START_FIELDS, tuple)
+
 
 def test_allowed_databases_exact():
     """CFG-01: ALLOWED_DATABASES is the exact four names in exact order."""
@@ -99,6 +102,17 @@ def test_log_fields_locked():
         "status",
         "ip_prefix",
         "error_code",
+    )
+
+
+def test_session_start_fields_locked():
+    """#5: SESSION_START_FIELDS is the locked exact tuple in exact order."""
+    assert config.SESSION_START_FIELDS == (
+        "request_id",
+        "ip_prefix",
+        "protocol_version",
+        "client_name",
+        "client_version",
     )
 
 

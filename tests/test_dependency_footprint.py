@@ -1,4 +1,4 @@
-"""NFR-04: dependency footprint locked to exact 6 runtime + 4 dev tuples.
+"""NFR-04: dependency footprint locked to exact 6 runtime + 5 dev tuples.
 
 Reads pyproject.toml via stdlib tomllib (Python 3.11+; pinned by
 pyproject.toml requires-python = ">=3.11"). Asserts set-equality with the
@@ -29,6 +29,7 @@ RUNTIME_DEPS_LOCKED = frozenset(
 # Locked per NFR-04. Names match [dependency-groups].dev (lines 15-21).
 DEV_DEPS_LOCKED = frozenset(
     {
+        "mkdocs-material",
         "pytest",
         "pytest-asyncio",
         "pytest-httpx",
@@ -69,7 +70,7 @@ def test_runtime_deps_match_locked_set() -> None:
 
 
 def test_dev_deps_match_locked_set() -> None:
-    """NFR-04: [dependency-groups.dev] must equal exactly the 4 locked dev names."""
+    """NFR-04: [dependency-groups.dev] must equal exactly the 5 locked dev names."""
     pyproject = tomllib.loads((_project_root() / "pyproject.toml").read_text())
     declared = frozenset(_parse_dep_name(d) for d in pyproject["dependency-groups"]["dev"])
     assert declared == DEV_DEPS_LOCKED, (
