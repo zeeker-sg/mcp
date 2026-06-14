@@ -118,7 +118,33 @@ On `initialize`, mint a random ephemeral id, and *also* log it on subsequent `to
 
 ---
 
-## 6. Recommendation
+## 6. Usage metrics we can derive for free (and what costs extra)
+
+If the goal is "learn about usage" rather than "identify users," most of the value comes from aggregating logs we *already* emit. None of the following needs per-session linkage, a session id, or any new privacy exposure — they are daily `COUNT`/`GROUP BY` over existing `tool_call` lines plus the proposed `session_start` line.
+
+### Free today (zero new code — `tool_call` already carries these)
+- **Calls per tool** — `COUNT(*) GROUP BY tool`. The single most actionable usage cut: search vs query_table vs fetch vs describe/list. Already in the log (`access_log.py` logs `tool`).
+- **Success/error mix** — `GROUP BY status, error_code`. Where callers hit `unknown_table`, `rate_limited`, etc.
+- **Latency distribution per tool** — percentiles over `duration_ms` (this is literally what issue #6 does for `search`).
+- **Coarse traffic shape** — calls per /24 per day via `ip_prefix` (blunt under NAT, but catches a single noisy non-Anthropic client).
+
+### Free once `session_start` lands (two counts, no linkage)
+- **Handshakes/day** — `COUNT(session_start)`.
+- **Mean calls per session** — `COUNT(tool_call) / COUNT(session_start)`. A ratio of two independent daily counts; **no correlation between lines required**, so no privacy step-up. A very low mean (e.g. 0.05) already exposes "most sessions do nothing" — the Q1/H2 signal — without attributing any call to any session.
+- **Client mix** — `GROUP BY client_name, client_version` from `session_start` (software identity, not user identity).
+
+### What the average *cannot* show — and why that costs extra
+Mean calls/session collapses the **distribution**. Recovering any of the below requires attributing each `tool_call` to a specific session, which (per §4 A4) is **not implementable under `stateless_http=True`** — it needs a client-echoed session token, i.e. the stateful-sessions project (A2) plus a persistent store, *and* a stable per-session key is itself a privacy step-up:
+- **Exact zero-call bounce rate** (the precise % of sessions that never call a tool, vs. inferring it from a low mean).
+- **Skew / power sessions** — whether the mean is driven by a few sessions doing 200 calls while most do 0–1.
+- **Funnels / sequences** — e.g. `search → query_table → fetch` ordering within a session.
+- **Per-session abuse outliers** — one session hammering, invisible in an aggregate.
+
+**Takeaway:** for the usage goal, take the average and lean on the already-free per-tool counts. Treat per-session attribution as a separate, later, stateful project justified by a concrete distributional question — not an extension of this change.
+
+---
+
+## 7. Recommendation
 
 A staged plan that delivers a real number in v1 without touching the stateless guarantee or user privacy:
 
@@ -142,7 +168,7 @@ A staged plan that delivers a real number in v1 without touching the stateless g
 
 ---
 
-## 7. Open questions to resolve before / during implementation
+## 8. Open questions to resolve before / during implementation
 
 1. **FastMCP 3.2 hook for `initialize`.** Confirm the exact middleware hook (`on_message` vs `on_request`) that fires on the `initialize` request, and that it runs in stateless mode. The pinned version is `fastmcp~=3.2` — verify against the installed wheel, not docs.
 2. **Field-set test strategy.** `tool_call`'s field set is locked and test-asserted (`config.py:488`, `tests/test_logging.py`). Decide: new locked tuple `SESSION_START_FIELDS` for the new event (recommended — keeps the two events independently auditable) vs widening `LOG_FIELDS`.
