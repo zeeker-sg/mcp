@@ -58,6 +58,12 @@ Two hypotheses, and the code points at the second.
 
 **We currently cannot distinguish H1 from H2 from logs alone — precisely because nothing logs the non-tool messages.** This is the strongest argument for adding a `session_start` / request-level event: it's not just a counting feature, it's the instrument that closes Q1. Once `initialize` is logged, "lots of handshakes, no tool calls" becomes directly visible and H2 is confirmed or killed.
 
+> **RESOLVED 2026-06-14 — H2 confirmed, H1 ruled out.** Method: (1) `tests/test_logging.py` passes (6/6) and `access_log.py` still emits `tool_call`, so the current build is not missing the event; (2) a controlled probe — one `list_databases` call against the live prod server — produced a clean `tool_call` line in the `zeeker-mcp` docker buffer:
+> ```json
+> {"tool": "list_databases", "duration_ms": 5782, "status": "ok", "event": "tool_call", "ip_prefix": "172.70.174", "timestamp": "2026-06-14T06:39:23.470334Z"}
+> ```
+> Prod logging works; the post-restart absence of `tool_call` lines is therefore **real** — connecting clients were handshaking without dispatching tools. This validates the A3 plan: `session_start` will surface that handshake traffic and produce non-zero counts. (Aside: the 5,782 ms `list_databases` duration — cold `MetadataCache`, not a #5 concern — is a datapoint for #6.)
+
 ---
 
 ## 4. Q2 — approaches for counting sessions
@@ -172,6 +178,6 @@ A staged plan that delivers a real number in v1 without touching the stateless g
 
 1. **FastMCP 3.2 hook for `initialize`.** Confirm the exact middleware hook (`on_message` vs `on_request`) that fires on the `initialize` request, and that it runs in stateless mode. The pinned version is `fastmcp~=3.2` — verify against the installed wheel, not docs.
 2. **Field-set test strategy.** `tool_call`'s field set is locked and test-asserted (`config.py:488`, `tests/test_logging.py`). Decide: new locked tuple `SESSION_START_FIELDS` for the new event (recommended — keeps the two events independently auditable) vs widening `LOG_FIELDS`.
-3. **Confirm H2 in prod.** Before building, a one-off grep of the live docker buffer for `initialize` POST bodies (or temporarily logging the MCP method) would confirm the "handshakes, no tools" hypothesis and validate that A3 will actually produce non-zero counts.
+3. ~~**Confirm H2 in prod.**~~ **RESOLVED 2026-06-14 (see §3).** A controlled `list_databases` probe against prod produced a `tool_call` line, proving the event works; the earlier post-restart absence was real handshake-only traffic (H2). A3 is cleared to build.
 4. **`clientInfo` reliability.** Confirm claude.ai's edge sends a usable `clientInfo.name`/`version` in `initialize` (some clients send generic values). Determines whether `session_start` can also answer "which clients".
 5. **Doc location for this artifact.** Placed in `.planning/research/` to match the repo's research convention; `docs/` is the published mkdocs site with an explicit `nav`, so internal deliberation doesn't belong there.
