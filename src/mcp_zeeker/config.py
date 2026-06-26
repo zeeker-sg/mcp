@@ -228,6 +228,13 @@ COLUMN_TYPES: dict[str, dict[str, str]] = {
 
 METADATA_TTL_SECONDS: int = int(os.getenv("METADATA_TTL_SECONDS", "1800"))
 
+# DatabaseSummaryCache TTL (#6c / #10). Caches per-DB /{db}.json responses
+# (table/columns/fts_table metadata) to eliminate redundant upstream fetches
+# in the search discovery path. Defaults to 300s (shorter than MetadataCache
+# because FTS-index changes should propagate faster); env-overridable for
+# operational tuning.
+DATABASE_SUMMARY_TTL_SECONDS: int = int(os.getenv("DATABASE_SUMMARY_TTL_SECONDS", "300"))
+
 # ---------------------------------------------------------------------------
 # Licensing
 # ---------------------------------------------------------------------------
@@ -508,6 +515,25 @@ SESSION_START_FIELDS: tuple[str, ...] = (
     "protocol_version",
     "client_name",
     "client_version",
+)
+
+# Locked field set for the `search_timing` event emitted by the search handler
+# (#6a / #8). Kept distinct from LOG_FIELDS so the tool_call schema test stays
+# independent and each event is auditable on its own — same pattern as
+# SESSION_START_FIELDS. The three sub-timing fields split the search handler's
+# total duration into the three structural phases identified in #6:
+#   discovery_ms   — auto-discovery + preview-resolution (Step 5)
+#   fan_out_ms     — concurrent per-table FTS fan-out (Step 8)
+#   post_filter_ms — defense-in-depth post-filter (Step 10)
+# The request_id / ip_prefix are inherited from contextvars (bound by
+# RequestIdMiddleware); tool is bound inside the handler.
+SEARCH_TIMING_FIELDS: tuple[str, ...] = (
+    "request_id",
+    "ip_prefix",
+    "tool",
+    "discovery_ms",
+    "fan_out_ms",
+    "post_filter_ms",
 )
 
 # ---------------------------------------------------------------------------

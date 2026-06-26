@@ -24,7 +24,7 @@ from fastmcp.exceptions import ToolError
 
 from mcp_zeeker import config
 from mcp_zeeker.core.config_lookup import hidden_columns_for
-from mcp_zeeker.core.datasette_client import DatasetteClient
+from mcp_zeeker.core.datasette_client import DatabaseSummary, DatasetteClient
 
 # ---------------------------------------------------------------------------
 # Sole-emission `raise_unknown_*` helpers (D2-14, D2-17, D3-07, D3-14)
@@ -113,6 +113,23 @@ def raise_invalid_query() -> NoReturn:
 # ---------------------------------------------------------------------------
 
 
+async def _get_database_summary(database: str) -> DatabaseSummary:
+    """Fetch a DatabaseSummary for `database`, using the DatabaseSummaryCache
+    when available (#6c / #10), falling back to direct DatasetteClient call
+    when the cache is not bound (test compat).
+
+    This is the single shared entry point for /{db}.json fetches — both
+    _visible_tables and _visible_columns route through it, so the cache
+    eliminates redundant upstream calls across both paths."""
+    try:
+        from mcp_zeeker.core.database_summary_cache import DatabaseSummaryCache
+
+        return await DatabaseSummaryCache.current().get_database(database)
+    except RuntimeError:
+        # Cache not bound — fall back to direct client call (test paths).
+        return await DatasetteClient.current().get_database(database)
+
+
 async def _visible_tables(database: str) -> set[str]:
     """Return the set of non-hidden table names for a database.
 
@@ -125,7 +142,7 @@ async def _visible_tables(database: str) -> set[str]:
     paths by patching raise_unknown_table and counting calls. A pre-check would
     short-circuit some paths and break the counter assertion.
     """
-    summary = await DatasetteClient.current().get_database(database)
+    summary = await _get_database_summary(database)
     hidden_set = config.HIDDEN_TABLES.get(database, set())
     return {t.name for t in summary.tables if not t.hidden and t.name not in hidden_set}
 
@@ -156,14 +173,14 @@ async def _visible_columns(database: str, table: str) -> set[str]:
     """Return the set of visible column names for database.table.
 
     Reuses describe_table's logic: upstream column set minus hidden_columns_for.
-    Reads via `DatasetteClient.current().get_database(database)` — the same
-    upstream call used by `_visible_tables` (D3-06 / Pitfall 5: single source
-    of truth for column visibility).
+    Reads via `_get_database_summary(database)` — the same upstream call used
+    by `_visible_tables` (D3-06 / Pitfall 5: single source of truth for column
+    visibility). Routes through DatabaseSummaryCache when available (#6c / #10).
 
     CRITICAL (Pitfall 1): NEVER add a separate HIDDEN_COLUMNS pre-check before
     this function — the counter-patch test in test_retrieval_side_channel.py
     detects separate code paths via raise_unknown_column invocation counts.
     """
-    summary = await DatasetteClient.current().get_database(database)
+    summary = await _get_database_summary(database)
     t = next(ts for ts in summary.tables if ts.name == table)
     return set(t.columns) - hidden_columns_for(database, table)

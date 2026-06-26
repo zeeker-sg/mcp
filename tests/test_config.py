@@ -116,6 +116,24 @@ def test_session_start_fields_locked():
     )
 
 
+def test_search_timing_fields_locked():
+    """#6a / #8: SEARCH_TIMING_FIELDS is the locked exact tuple in exact order."""
+    assert config.SEARCH_TIMING_FIELDS == (
+        "request_id",
+        "ip_prefix",
+        "tool",
+        "discovery_ms",
+        "fan_out_ms",
+        "post_filter_ms",
+    )
+
+
+def test_database_summary_ttl_seconds_default():
+    """#6c / #10: DATABASE_SUMMARY_TTL_SECONDS is a positive int (default 300)."""
+    assert isinstance(config.DATABASE_SUMMARY_TTL_SECONDS, int)
+    assert config.DATABASE_SUMMARY_TTL_SECONDS > 0
+
+
 def test_hidden_tables_phase2():
     """D2-09: Phase 2 extended HIDDEN_TABLES — all DBs have platform-internal tables hidden;
     sglawwatch also retains legacy metadata/schema_versions."""
