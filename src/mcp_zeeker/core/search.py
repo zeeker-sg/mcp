@@ -53,10 +53,9 @@ import structlog
 
 from mcp_zeeker import config
 from mcp_zeeker.core.citation import placeholder_columns, synthesize_citation
-from mcp_zeeker.core.datasette_client import DatasetteClient, UpstreamCallFailed
+from mcp_zeeker.core.datasette_client import DatabaseSummary, DatasetteClient, UpstreamCallFailed
 from mcp_zeeker.core.metadata_cache import MetadataCache
 from mcp_zeeker.core.middleware.retrieved_at import get_tool_started_at
-from mcp_zeeker.core.visibility import _visible_tables
 
 log = structlog.get_logger()
 
@@ -113,7 +112,12 @@ def resolve_preview_columns(
     return out
 
 
-async def searchable_tables_for(db: str) -> tuple[str, ...]:
+async def searchable_tables_for(
+    db: str,
+    *,
+    summary: DatabaseSummary | None = None,
+    visible: set[str] | None = None,
+) -> list[tuple[str, dict[str, str | None]]]:
     """Discover FTS-indexed, visible, non-denied, preview-resolvable tables (D4-02).
 
     Applies the FOUR-gate filter per 04-RESEARCH §3.2 in order:
@@ -128,11 +132,23 @@ async def searchable_tables_for(db: str) -> tuple[str, ...]:
       4. `resolve_preview_columns(db, table, available)` returns non-null
          title AND url — D4-12 drop signal; logs `search_table_no_preview_columns`.
 
-    Reads from `DatasetteClient.current().get_database(db)`. Does NOT consume
+    Reads from `DatasetteClient.current().get_database(db)` (or the provided
+    `summary` for request-scoped memoization — #6b / #9). Does NOT consume
     `MetadataCache.get_table_metadata` because /-/metadata.json is sparse and
     lacks the `fts_table` field (04-RESEARCH §3.2 corrected planner input).
 
-    Returns a tuple in upstream metadata order — deterministic for tests.
+    #6b / #9: Returns `(table_name, preview)` tuples so the handler no longer
+    needs to re-fetch columns via `_visible_columns(db, table)` per table —
+    the preview is resolved once here from `TableSummary.columns`, which is
+    the same source `_visible_columns` would read. This eliminates the
+    per-table `get_database` round-trip that dominated the old discovery cost.
+
+    The optional `summary` and `visible` parameters enable request-scoped
+    memoization (#6b): when the handler pre-fetches `get_database(db)` once
+    and computes `_visible_tables` from it, passing both in collapses
+    `2 + N` `get_database` calls per DB to exactly 1 (#9).
+
+    Returns a list in upstream metadata order — deterministic for tests.
     Iteration order matches `summary.tables` upstream order so the handler's
     alphabetical-DB sort plus this in-DB order gives a fully deterministic
     round-robin merge (D4-05 / 04-RESEARCH §3.9).
@@ -142,9 +158,14 @@ async def searchable_tables_for(db: str) -> tuple[str, ...]:
     function does not receive the query at all; the contract isolates the
     discovery surface from query content).
     """
-    summary = await DatasetteClient.current().get_database(db)
-    visible = await _visible_tables(db)
-    out: list[str] = []
+    if summary is None:
+        summary = await DatasetteClient.current().get_database(db)
+    if visible is None:
+        from mcp_zeeker.core.visibility import _visible_tables
+
+        visible = await _visible_tables(db)
+    assert summary is not None  # for type checkers; always assigned above
+    out: list[tuple[str, dict[str, str | None]]] = []
     for t in summary.tables:
         # Gate 1 — fts_table presence (LOAD-BEARING; Pitfall 3).
         if t.fts_table is None:
@@ -156,15 +177,15 @@ async def searchable_tables_for(db: str) -> tuple[str, ...]:
         if any(t.name.endswith(p) for p in config.SEARCH_DENYLIST_PATTERNS):
             continue
         # Gate 4 — preview-shape resolvable (D4-12). Uses TableSummary.columns
-        # to avoid an extra upstream round-trip; the handler revisits via
-        # _visible_columns for the per-table preview at dispatch time.
+        # to avoid an extra upstream round-trip (#6b / #9: the preview resolved
+        # here is threaded out to the handler so it doesn't re-resolve).
         available = set(t.columns)
         preview = resolve_preview_columns(db, t.name, available)
         if preview is None:
             log.warning("search_table_no_preview_columns", database=db, table=t.name)
             continue
-        out.append(t.name)
-    return tuple(out)
+        out.append((t.name, preview))
+    return out
 
 
 async def _one_table(

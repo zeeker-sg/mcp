@@ -99,23 +99,28 @@ async def lifespan(app: Starlette):
             # Envelope not available (wave-2 stub not yet merged) — tolerate
             pass
 
-        # Bind MetadataCache, DatasetteClient, and ParentPKCache into their
-        # respective contextvars. All three are process-local singletons (single
-        # Uvicorn worker per CFG / RATE-06 / NFR-04). Reset order is reverse of
-        # bind order (LIFO).
+        # Bind MetadataCache, DatasetteClient, DatabaseSummaryCache, and
+        # ParentPKCache into their respective contextvars. All four are
+        # process-local singletons (single Uvicorn worker per CFG / RATE-06 /
+        # NFR-04). Reset order is reverse of bind order (LIFO).
+        from mcp_zeeker.core.database_summary_cache import DatabaseSummaryCache
         from mcp_zeeker.core.datasette_client import DatasetteClient
         from mcp_zeeker.core.fragment_join import ParentPKCache
         from mcp_zeeker.core.metadata_cache import MetadataCache
 
         mc = MetadataCache(http_client, config.UPSTREAM_URL, ttl=config.METADATA_TTL_SECONDS)
         mc_token = MetadataCache.bind(mc)
-        token = DatasetteClient.bind(DatasetteClient(http_client))
+        dc = DatasetteClient(http_client)
+        token = DatasetteClient.bind(dc)
+        dsc = DatabaseSummaryCache(dc, ttl=config.DATABASE_SUMMARY_TTL_SECONDS)
+        dsc_token = DatabaseSummaryCache.bind(dsc)
         pk_token = ParentPKCache.bind(ParentPKCache())
         try:
             async with mcp_app.lifespan(mcp_app):  # MUST be nested (Pitfall 1)
                 yield
         finally:
             ParentPKCache.reset(pk_token)
+            DatabaseSummaryCache.reset(dsc_token)
             DatasetteClient.reset(token)
             MetadataCache.reset(mc_token)
 

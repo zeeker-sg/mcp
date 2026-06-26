@@ -37,6 +37,7 @@ resolves the preview shape from `SEARCH_PREVIEW_DEFAULTS`.
 
 from __future__ import annotations
 
+import time
 from typing import Annotated
 
 import structlog
@@ -49,11 +50,10 @@ from mcp_zeeker.core.envelope import Envelope
 from mcp_zeeker.core.fts_escape import escape_fts5
 from mcp_zeeker.core.search import (
     fan_out_search,
-    resolve_preview_columns,
     searchable_tables_for,
 )
 from mcp_zeeker.core.visibility import (
-    _visible_columns,
+    _get_database_summary,
     _visible_tables,
     raise_invalid_query,
     raise_unknown_database,
@@ -160,24 +160,43 @@ async def search(
     # Alphabetical-DB iteration gives deterministic round-robin merge ordering
     # (D4-05 / 04-RESEARCH §3.9); within each DB, searchable_tables_for preserves
     # upstream metadata order.
+    #
+    # #6b / #9: Request-scoped memoization — fetch get_database(db) once per
+    # DB and compute visible_tables from it. Pass both into
+    # searchable_tables_for so it doesn't re-fetch. The preview is resolved
+    # inside searchable_tables_for from TableSummary.columns (same source
+    # _visible_columns would read), so the handler no longer needs to call
+    # _visible_columns per table. This collapses ~20 get_database calls to ~4.
+    # The per-DB visible sets are also saved for the Step 10 post-filter so it
+    # doesn't need to re-fetch either — the post-filter reads the same snapshot
+    # as discovery (which is also what the race-guard wants).
+    discovery_start = time.perf_counter()
     target_tables: list[tuple[str, str, dict[str, str | None]]] = []
+    # Per-DB visible-table sets from discovery snapshot; reused in post-filter.
+    discovery_visible: dict[str, set[str]] = {}
     for db in sorted(target_dbs):
-        discovered = await searchable_tables_for(db)
-        for table in discovered:
-            # Re-resolve preview against _visible_columns for the handler-level
-            # contract (searchable_tables_for already filtered, but this surface
-            # is the documented integration point per D4-19 step 5).
-            available = await _visible_columns(db, table)
-            preview = resolve_preview_columns(db, table, available)
-            if preview is None:
-                # Already logged inside searchable_tables_for; skip silently.
-                continue
+        summary = await _get_database_summary(db)
+        hidden_set = config.HIDDEN_TABLES.get(db, set())
+        visible = {t.name for t in summary.tables if not t.hidden and t.name not in hidden_set}
+        discovery_visible[db] = visible
+        discovered = await searchable_tables_for(db, summary=summary, visible=visible)
+        for table, preview in discovered:
             target_tables.append((db, table, preview))
+    discovery_ms = int((time.perf_counter() - discovery_start) * 1000)
 
     # Step 6: empty-target short-circuit (D4-03 — multi-DB provenance applies).
     # This is the documented "this DB has no FTS" path; the description tells the
     # LLM the response is honest (empty rows + empty upstream_total_hits).
     if not target_tables:
+        # #6a / #8: emit timing even on short-circuit so the event is always
+        # present for a search call (fan_out_ms and post_filter_ms are 0).
+        log.info(
+            "search_timing",
+            tool="search",
+            discovery_ms=discovery_ms,
+            fan_out_ms=0,
+            post_filter_ms=0,
+        )
         return Envelope.for_search_results(
             rows=[],
             upstream_total_hits={},
@@ -192,9 +211,11 @@ async def search(
     # Step 8: concurrent fan-out (D4-05 / D4-06). Per-table fetch quota equals
     # `limit` per D4-05; the round-robin merge inside fan_out_search already
     # slices to `per_table_limit` as belt-and-suspenders.
+    fan_out_start = time.perf_counter()
     rows, upstream_total_hits, failed_tables, failure_statuses = await fan_out_search(
         escaped, target_tables, limit
     )
+    fan_out_ms = int((time.perf_counter() - fan_out_start) * 1000)
 
     # Step 9: all-fail mapping (D4-09 case (c) / 04-RESEARCH §3.7). When every
     # dispatched table failed, inspect the failure statuses:
@@ -211,18 +232,42 @@ async def search(
         raise ToolError("upstream_unavailable: all search targets failed") from None
 
     # Step 10: D4-13 defense-in-depth post-filter — re-check each returned row's
-    # (db, table) against _visible_tables(db). Guards against the rare race where
+    # (db, table) against visible tables. Guards against the rare race where
     # a table disappears from upstream's visible set between dispatch and
     # response. Cached per-DB to avoid N round-trips when many rows share a DB.
-    _visible_tables_cache: dict[str, set[str]] = {}
+    # #6b / #9: Reuses the discovery snapshot's visible sets (discovery_visible)
+    # so no additional get_database calls are needed — the post-filter reads the
+    # same snapshot as discovery, which collapses the race window and makes this
+    # guard near-vacuous under caching. The guard still holds correctness against
+    # the snapshot.
+    # #6c / #10 note: under DatabaseSummaryCache, the snapshot is the cached one
+    # — same effect. Acceptable; documented per the issue.
+    post_filter_start = time.perf_counter()
     post_filtered: list[dict] = []
     for r in rows:
         db_for_row = r["database"]
-        if db_for_row not in _visible_tables_cache:
-            _visible_tables_cache[db_for_row] = await _visible_tables(db_for_row)
-        if r["table"] in _visible_tables_cache[db_for_row]:
+        visible = discovery_visible.get(db_for_row)
+        if visible is None:
+            # DB not in discovery (e.g., all tables were non-FTS); fall back to
+            # a live fetch. This path is rare — only if a row's DB wasn't in
+            # target_dbs at all (shouldn't happen in normal operation).
+            visible = await _visible_tables(db_for_row)
+        if r["table"] in visible:
             post_filtered.append(r)
     rows = post_filtered
+    post_filter_ms = int((time.perf_counter() - post_filter_start) * 1000)
+
+    # #6a / #8: Emit search sub-timings as a separate event so the tool_call
+    # schema test stays independent (same pattern as SESSION_START_FIELDS).
+    # The request_id / ip_prefix are inherited from contextvars bound by
+    # RequestIdMiddleware; tool is bound here. INJ-05: no query string bound.
+    log.info(
+        "search_timing",
+        tool="search",
+        discovery_ms=discovery_ms,
+        fan_out_ms=fan_out_ms,
+        post_filter_ms=post_filter_ms,
+    )
 
     # Step 11: slice to limit (belt-and-suspenders — fan_out_search already
     # merged with per_table_limit=limit, but the merge can over-fill briefly
