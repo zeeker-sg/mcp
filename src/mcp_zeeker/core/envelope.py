@@ -211,8 +211,10 @@ class Envelope(BaseModel):
         + `citation` are populated by `core/search.py::_one_table`, NOT by this
         factory. D6-09 / D6-11: retrieved_at via the contextvar accessor.
 
-        - rows: round-robin-merged preview rows (D4-05) already truncated to
-          the caller-provided `limit` inside fan_out_search.
+        - rows: merged preview rows already truncated to the caller-provided
+          `limit` inside fan_out_search — round-robin (D4-05) on the
+          legacy/bm25 paths, RRF-fused (issue #12 Phase 2, rows carry
+          `_fused_score`) when SEARCH_RANKING="bm25_rrf".
         - upstream_total_hits: per-(db.table) `filtered_table_rows_count`
           surfaced from each per-table response so the LLM can decide whether
           to narrow the query or paginate via query_table.

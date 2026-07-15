@@ -277,3 +277,35 @@ class DatasetteClient:
             params=[("_shape", "objects"), *params],
         )
         return resp.json()
+
+    async def execute_sql(
+        self,
+        database: str,
+        sql: str,
+        params: dict[str, str],
+    ) -> dict:
+        """Execute a read-only SQL query via GET /{database}.json?sql=... (issue #12).
+
+        Named parameters: write `:name` in the SQL string and pass
+        `{"name": value}` here — each entry becomes a separate query param,
+        which is how Datasette binds named SQL parameters. User-supplied text
+        MUST only ever travel through `params` (bound server-side by sqlite3),
+        NEVER interpolated into `sql` — the caller-side builder
+        (`core.search.build_bm25_sql`) enforces this; this method just
+        transports.
+
+        `_shape=objects` keeps the response contract aligned with
+        `get_table_rows`: the parsed dict's `rows` field is a list of dicts.
+
+        Requires the upstream owner bearer token (config.UPSTREAM_TOKEN via
+        core/http_client.py) — anonymous `?sql=` is 403 upstream, which
+        surfaces as UpstreamCallFailed(status=403) through the shared
+        `_request_with_retry` policy (D-16 retry-once-with-jitter on 502/503,
+        immediate surface otherwise) — same error contract as get_table_rows.
+        """
+        resp = await self._request_with_retry(
+            "GET",
+            f"/{database}.json",
+            params=[("sql", sql), ("_shape", "objects"), *params.items()],
+        )
+        return resp.json()

@@ -15,12 +15,12 @@ from __future__ import annotations
 import httpx
 import pytest
 import pytest_httpx
+from fastmcp.exceptions import ToolError
 
 from mcp_zeeker import config
 from mcp_zeeker.core.datasette_client import DatasetteClient
 from mcp_zeeker.core.metadata_cache import MetadataCache
 from mcp_zeeker.tools.discovery import list_tables
-from fastmcp.exceptions import ToolError
 
 
 def _db_url(name: str) -> str:
@@ -118,10 +118,16 @@ async def test_sglawwatch_filters_metadata_and_schema_versions(
     httpx_mock.add_response(
         url=_db_url("sglawwatch"),
         json=_tables_payload(
-            _simple_tables([
-                "metadata", "schema_versions", "_zeeker_schemas", "_zeeker_updates",
-                "headlines", "commentaries",
-            ])
+            _simple_tables(
+                [
+                    "metadata",
+                    "schema_versions",
+                    "_zeeker_schemas",
+                    "_zeeker_updates",
+                    "headlines",
+                    "commentaries",
+                ]
+            )
         ),
     )
     envelope = await list_tables("sglawwatch")
@@ -154,7 +160,17 @@ async def test_row_count_null_passthrough(
     """D2-13: row_count passes through as None — not substituted with -1 or 0."""
     httpx_mock.add_response(
         url=_db_url("zeeker-judgements"),
-        json=_tables_payload([{"name": "judgments", "hidden": False, "count": None, "columns": [], "primary_keys": []}]),
+        json=_tables_payload(
+            [
+                {
+                    "name": "judgments",
+                    "hidden": False,
+                    "count": None,
+                    "columns": [],
+                    "primary_keys": [],
+                }
+            ]
+        ),
     )
     envelope = await list_tables("zeeker-judgements")
 
@@ -172,9 +188,7 @@ async def test_description_uses_upstream_when_present(
         json={
             "databases": {
                 "zeeker-judgements": {
-                    "tables": {
-                        "judgments": {"description": "Upstream description wins"}
-                    }
+                    "tables": {"judgments": {"description": "Upstream description wins"}}
                 }
             }
         },
@@ -187,7 +201,17 @@ async def test_description_uses_upstream_when_present(
         try:
             httpx_mock.add_response(
                 url=_db_url("zeeker-judgements"),
-                json=_tables_payload([{"name": "judgments", "hidden": False, "count": 100, "columns": [], "primary_keys": []}]),
+                json=_tables_payload(
+                    [
+                        {
+                            "name": "judgments",
+                            "hidden": False,
+                            "count": 100,
+                            "columns": [],
+                            "primary_keys": [],
+                        }
+                    ]
+                ),
             )
             envelope = await list_tables("zeeker-judgements")
 
@@ -205,8 +229,21 @@ async def test_description_falls_back_to_config(
     """D2-01: config.TABLE_DESCRIPTIONS fallback used when upstream returns empty/None."""
     httpx_mock.add_response(
         url=_db_url("pdpc"),
-        json=_tables_payload([{"name": "enforcement_decisions", "hidden": False, "count": 50, "columns": [], "primary_keys": []}]),
+        json=_tables_payload(
+            [
+                {
+                    "name": "enforcement_decisions",
+                    "hidden": False,
+                    "count": 50,
+                    "columns": [],
+                    "primary_keys": [],
+                }
+            ]
+        ),
     )
     envelope = await list_tables("pdpc")
 
-    assert envelope.data[0]["description"] == config.TABLE_DESCRIPTIONS["pdpc"]["enforcement_decisions"]
+    assert (
+        envelope.data[0]["description"]
+        == config.TABLE_DESCRIPTIONS["pdpc"]["enforcement_decisions"]
+    )

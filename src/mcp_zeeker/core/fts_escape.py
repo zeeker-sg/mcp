@@ -49,3 +49,53 @@ def escape_fts5(query: str) -> str:
     fires BEFORE this function is called.
     """
     return '"' + query.replace('"', '""') + '"'
+
+
+def escape_fts5_terms(query: str) -> str:
+    """Escape a user query as independent quoted FTS5 terms (issue #12 Phase 1).
+
+    Splits on whitespace, wraps each token in double quotes (doubling any
+    embedded quote — the only character needing escaping inside an FTS5
+    string), and joins with single spaces. FTS5 treats adjacent quoted
+    strings as implicit AND, so all terms must match but adjacency is NOT
+    required — unlike `escape_fts5`, which demands the exact phrase. This is
+    the BM25-ranked default: term-level matching lets bm25() rank partial
+    proximity instead of the all-or-nothing phrase gate.
+
+    Same security discipline as `escape_fts5`: pure stdlib string operation,
+    no IO, never fails — every FTS5 operator (NEAR, OR, AND, `:col:`, `*`,
+    parentheses) is neutralized once inside its per-token quote wrap.
+    Empty/whitespace input yields "" — the handler's empty-query gate fires
+    BEFORE this function is called (D4-19 step 1), same contract as
+    `escape_fts5`.
+
+    Examples:
+      escape_fts5_terms("data protection") -> two quoted tokens, implicit AND
+      escape_fts5_terms("NEAR OR AND")     -> three literal quoted tokens
+    """
+    return " ".join('"' + token.replace('"', '""') + '"' for token in query.split())
+
+
+def escape_user_query(query: str) -> str:
+    """Phrase-intent dispatch between `escape_fts5` and `escape_fts5_terms`.
+
+    Issue #12 Phase 1: when the stripped user query is enclosed in double
+    quotes (explicit phrase intent, e.g. `"personal data"`), the INNER text
+    is escaped as a single FTS5 phrase via `escape_fts5` — adjacency
+    required. Otherwise the query is escaped term-by-term via
+    `escape_fts5_terms` — implicit AND, adjacency not required.
+
+    Degenerate quoted inputs (`\"\"`, `\"   \"` — empty inner text) fall back
+    to the term path so we never emit the bare `\"\"` FTS5 syntax error for
+    an input that passed the handler's non-empty gate.
+
+    Pure function, never fails — same discipline as the two escapes it
+    dispatches to. The handler's empty-query gate (D4-19 step 1) fires
+    BEFORE this function is called.
+    """
+    stripped = query.strip()
+    if len(stripped) >= 2 and stripped.startswith('"') and stripped.endswith('"'):
+        inner = stripped[1:-1]
+        if inner.strip():
+            return escape_fts5(inner)
+    return escape_fts5_terms(query)

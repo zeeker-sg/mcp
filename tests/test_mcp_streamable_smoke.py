@@ -22,7 +22,6 @@ test_transport_stateless_session.py can share it without cross-file imports.
 
 from __future__ import annotations
 
-import pytest
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 

@@ -47,6 +47,67 @@ def test_escape_fts5(raw: str, expected: str) -> None:
     assert escape_fts5(raw) == expected
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # Multi-term: whitespace split, per-token quote wrap, single-space join.
+        ("data protection", '"data" "protection"'),
+        # FTS5 operators neutralized per-token once quoted.
+        ("OR AND NEAR", '"OR" "AND" "NEAR"'),
+        ("NEAR/5 word", '"NEAR/5" "word"'),
+        ("text:foo OR id:0", '"text:foo" "OR" "id:0"'),
+        ("*", '"*"'),
+        (":column:value", '":column:value"'),
+        ("((((", '"(((("'),
+        ("Section 5(a)", '"Section" "5(a)"'),
+        # Embedded quotes doubled inside each token wrap.
+        ('he said "hi"', '"he" "said" """hi"""'),
+        # Unicode terms.
+        ("隐私 保护", '"隐私" "保护"'),
+        # Single term — same output shape as escape_fts5 for quote-free input.
+        ("privacy", '"privacy"'),
+        # Collapses arbitrary whitespace runs (tabs / newlines) to single joins.
+        ("data\t\nprotection   act", '"data" "protection" "act"'),
+        # Empty / whitespace-only — handler's empty-query gate fires first.
+        ("", ""),
+        ("   ", ""),
+    ],
+)
+def test_escape_fts5_terms(raw: str, expected: str) -> None:
+    """Issue #12: escape_fts5_terms wraps each whitespace token in quotes
+    (internal quotes doubled) and joins with single spaces — FTS5 implicit
+    AND, adjacency not required."""
+    from mcp_zeeker.core.fts_escape import escape_fts5_terms
+
+    assert escape_fts5_terms(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # Explicit phrase intent: quoted query → inner text as ONE phrase.
+        ('"data protection"', '"data protection"'),
+        ('  "data protection"  ', '"data protection"'),
+        # Phrase with embedded quotes: inner text goes through escape_fts5.
+        ('"he said "hi""', '"he said ""hi"""'),
+        # No phrase intent → term-level escape.
+        ("data protection", '"data" "protection"'),
+        ("privacy", '"privacy"'),
+        # Unbalanced / degenerate quoting falls back to the term path.
+        ('"unbalanced', '"""unbalanced"'),
+        ('unbalanced"', '"unbalanced"""'),
+        ('""', '""""""'),  # empty inner → term path (never emits bare "")
+        ('"', '""""'),  # single quote char → term path
+    ],
+)
+def test_escape_user_query_phrase_intent(raw: str, expected: str) -> None:
+    """Issue #12: escape_user_query dispatches quoted queries to the phrase
+    escape (adjacency required) and everything else to the term escape."""
+    from mcp_zeeker.core.fts_escape import escape_user_query
+
+    assert escape_user_query(raw) == expected
+
+
 def test_escape_fts5_is_pure_string() -> None:
     """Defensive: the module source contains no `raise` or `await`.
 
