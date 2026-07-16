@@ -24,8 +24,6 @@ middleware pipeline, no real HTTP socket).
 
 from __future__ import annotations
 
-import pytest
-
 
 def _initialize_payload() -> dict:
     """Valid MCP JSON-RPC initialize payload."""

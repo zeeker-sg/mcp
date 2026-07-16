@@ -113,9 +113,7 @@ def test_bogus_session_id_does_not_404(live_server):
             },
         )
         # Initialize should succeed
-        assert init_resp.status_code != 500, (
-            f"initialize failed with 500: {init_resp.text[:200]}"
-        )
+        assert init_resp.status_code != 500, f"initialize failed with 500: {init_resp.text[:200]}"
 
         # Step 2: tools/list WITH a fabricated session ID the server doesn't know
         tools_resp = client.post(

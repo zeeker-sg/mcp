@@ -32,9 +32,7 @@ async def test_healthz_returns_ok_without_upstream(asgi_client):
     assert resp.json() == {"status": "ok"}
 
 
-async def test_healthz_dispatches_no_httpx_request(
-    asgi_client, httpx_mock: pytest_httpx.HTTPXMock
-):
+async def test_healthz_dispatches_no_httpx_request(asgi_client, httpx_mock: pytest_httpx.HTTPXMock):
     """OBS-01 belt-and-suspenders: /healthz MUST NOT dispatch any upstream call.
 
     pytest-httpx records every outgoing httpx call; if /healthz emits one,

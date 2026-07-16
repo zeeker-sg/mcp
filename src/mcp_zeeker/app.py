@@ -46,11 +46,13 @@ async def _mcp_get_status(scope, receive, send):
     which is noisy in logs and triggers false error-rate alerts. This
     wrapper returns a minimal 200 without interfering with POSTs.
     """
-    await send({
-        "type": "http.response.start",
-        "status": 200,
-        "headers": [(b"content-type", b"application/json")],
-    })
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", b"application/json")],
+        }
+    )
     body = b'{"status":"ok","protocol":"2025-06-18","name":"zeeker"}'
     await send({"type": "http.response.body", "body": body})
 

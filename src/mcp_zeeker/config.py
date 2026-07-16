@@ -171,15 +171,21 @@ LIGHT_COLUMNS: dict[str, list[str]] = {
 # Fallback table descriptions for tables absent/incomplete in /-/metadata.json
 TABLE_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "pdpc": {
-        "enforcement_decisions": "PDPC enforcement decisions and regulatory actions on personal data protection.",
-        "enforcement_decisions_fragments": "Paragraph-level fragments of PDPC enforcement decision documents.",
+        "enforcement_decisions": (
+            "PDPC enforcement decisions and regulatory actions on personal data protection."
+        ),
+        "enforcement_decisions_fragments": (
+            "Paragraph-level fragments of PDPC enforcement decision documents."
+        ),
     },
     "zeeker-judgements": {
         "judgments_fragments": "Paragraph-level fragments of Singapore court judgment documents.",
     },
     "sglawwatch": {
         "commentaries": "Curated Singapore legal commentaries and academic articles.",
-        "about_singapore_law_fragments": "Paragraph-level fragments of about-Singapore-law articles.",
+        "about_singapore_law_fragments": (
+            "Paragraph-level fragments of about-Singapore-law articles."
+        ),
     },
 }
 
@@ -594,3 +600,129 @@ SEARCH_PREVIEW_DEFAULTS: dict[str, tuple[str, ...]] = {
 # column_name | None}} — mirrors URL_COLUMNS flat-key style. `None` value
 # means "explicitly suppress this field" (emit the preview row's field as null).
 SEARCH_PREVIEW_OVERRIDES: dict[str, dict[str, str | None]] = {}
+
+# ---------------------------------------------------------------------------
+# Issue #12 Phase 1 — BM25 search ranking (SEARCH_RANKING / SEARCH_BM25_WEIGHTS)
+# ---------------------------------------------------------------------------
+
+# Search ranking mode. Valid values:
+#   "legacy"   — Datasette table-view `_search=` dispatch (metadata date sort,
+#                NOT relevance-ordered). The pre-#12 baseline.
+#   "bm25"     — per-table BM25-ordered lists via owner-token SQL against the
+#                FTS5 index (`bm25(<fts>, w1, ...)` — NEGATIVE scores, best =
+#                most negative), merged with the existing round-robin.
+#   "bm25_rrf" — same per-table BM25 lists; Phase 2 of #12 replaces the
+#                round-robin merge with Reciprocal Rank Fusion. In Phase 1
+#                both bm25 values behave identically.
+#
+# The SQL path issues arbitrary read-only `?sql=` queries, which upstream
+# Datasette only permits for the owner actor (bearer UPSTREAM_TOKEN).
+# Anonymous `?sql=` is 403 — anonymous deployments MUST stay on "legacy",
+# hence the token-conditional default below. Env var SEARCH_RANKING
+# overrides for operational tuning / staged rollout.
+SEARCH_RANKING: str = os.getenv("SEARCH_RANKING", "bm25_rrf" if UPSTREAM_TOKEN else "legacy")
+
+# Issue #12: per-table BM25 column weights — THE single tuning point for
+# search relevance (acceptance criterion: "configurable in one place").
+# Keyed "<db>.<table>" (URL_COLUMNS flat-key style) → {fts_column: weight}.
+# Weights are passed to `bm25(<fts>, w1, w2, ...)` in FTS-INDEX COLUMN ORDER
+# (derived from upstream discovery metadata at dispatch time — the order here
+# is documentation only). Columns absent from a table's entry (and tables
+# absent entirely) default to 1.0. Heuristic: title-like ~10.0,
+# summary-like ~5.0, name/topic-like ~3.0, body-like ~1.0.
+# Values MUST be int/float — the SQL builder validates the type and falls
+# back to 1.0 rather than interpolating anything non-numeric (INJ defense:
+# weights are the ONLY config-sourced literals in the ranked-search SQL).
+SEARCH_BM25_WEIGHTS: dict[str, dict[str, float]] = {
+    # fts columns: [case_name, summary, court_summary]
+    "zeeker-judgements.judgments": {
+        "case_name": 10.0,
+        "summary": 5.0,
+        "court_summary": 5.0,
+    },
+    # fts columns: [title, organisation, decision_type, summary]
+    "pdpc.enforcement_decisions": {
+        "title": 10.0,
+        "organisation": 8.0,
+        "decision_type": 2.0,
+        "summary": 5.0,
+    },
+    # fts columns: [title, topic, summary]
+    "pdpc.guidance_by_topic": {"title": 10.0, "topic": 3.0, "summary": 5.0},
+    "pdpc.regulatory_guidance": {"title": 10.0, "topic": 3.0, "summary": 5.0},
+    # sg-gov-newsrooms — uniform fts columns: [title, summary]
+    "sg-gov-newsrooms.acra_news": {"title": 10.0, "summary": 5.0},
+    "sg-gov-newsrooms.agc_news": {"title": 10.0, "summary": 5.0},
+    "sg-gov-newsrooms.ccs_news": {"title": 10.0, "summary": 5.0},
+    "sg-gov-newsrooms.ipos_news": {"title": 10.0, "summary": 5.0},
+    "sg-gov-newsrooms.judiciary_news": {"title": 10.0, "summary": 5.0},
+    "sg-gov-newsrooms.mlaw_news": {"title": 10.0, "summary": 5.0},
+    "sg-gov-newsrooms.mom_news": {"title": 10.0, "summary": 5.0},
+    "sg-gov-newsrooms.pdpc_news": {"title": 10.0, "summary": 5.0},
+    # fts columns: [title, summary]
+    "sglawwatch.headlines": {"title": 10.0, "summary": 5.0},
+    # fts columns: [title, author, description, full_text]
+    "sglawwatch.commentaries": {
+        "title": 10.0,
+        "author": 3.0,
+        "description": 5.0,
+        "full_text": 1.0,
+    },
+    # fts columns: [title]
+    "sglawwatch.about_singapore_law": {"title": 10.0},
+}
+
+# ---------------------------------------------------------------------------
+# Issue #12 Phase 3 — fragment passage search (MaxP rollup → RRF)
+# ---------------------------------------------------------------------------
+
+# Fragment sources for passage-level search. Body text (e.g. full judgment
+# paragraphs) is only FTS-indexed in *_fragments_fts tables, which the
+# search fan-out denylists (SEARCH_DENYLIST_PATTERNS — fragments break the
+# preview-row contract). Each entry here rolls fragment matches UP to the
+# PARENT document (MaxP: best passage score per parent = MIN(bm25(...)),
+# bm25 is negative) so body matches surface as parent-document preview rows.
+#
+# Keyed "<db>.<fragment_table>" (URL_COLUMNS flat-key style) →
+#   parent_table: the parent content table whose rows are returned
+#   parent_link:  fragment column referencing the parent id (the JOIN key)
+#   parent_key:   parent pk column
+#
+# Discovery gates (core.search.fragment_sources_for): the fragment fts table
+# must exist upstream AND the parent must pass the existing search gates
+# (visible + preview-resolvable). Config entries for tables that fail those
+# gates are silently skipped — safe to list sources ahead of upstream state.
+#
+# Link columns verified live 2026-07-15/16 against data.zeeker.sg table
+# column lists: judgments_fragments carries `judgment_id`;
+# enforcement_decisions_fragments / guidance_by_topic_fragments /
+# regulatory_guidance_fragments all carry an unambiguous `parent_id`
+# (identical [id, parent_id, text, sequence, content_type, char_count]
+# shape); about_singapore_law_fragments carries `item_id`.
+SEARCH_FRAGMENT_SOURCES: dict[str, dict[str, str]] = {
+    "zeeker-judgements.judgments_fragments": {
+        "parent_table": "judgments",
+        "parent_link": "judgment_id",
+        "parent_key": "id",
+    },
+    "pdpc.enforcement_decisions_fragments": {
+        "parent_table": "enforcement_decisions",
+        "parent_link": "parent_id",
+        "parent_key": "id",
+    },
+    "pdpc.guidance_by_topic_fragments": {
+        "parent_table": "guidance_by_topic",
+        "parent_link": "parent_id",
+        "parent_key": "id",
+    },
+    "pdpc.regulatory_guidance_fragments": {
+        "parent_table": "regulatory_guidance",
+        "parent_link": "parent_id",
+        "parent_key": "id",
+    },
+    "sglawwatch.about_singapore_law_fragments": {
+        "parent_table": "about_singapore_law",
+        "parent_link": "item_id",
+        "parent_key": "id",
+    },
+}

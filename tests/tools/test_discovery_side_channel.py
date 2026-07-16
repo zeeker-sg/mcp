@@ -15,12 +15,12 @@ from unittest.mock import patch
 import httpx
 import pytest
 import pytest_httpx
+from fastmcp.exceptions import ToolError
 
 from mcp_zeeker import config
 from mcp_zeeker.core.datasette_client import DatasetteClient
 from mcp_zeeker.core.metadata_cache import MetadataCache
 from mcp_zeeker.tools.discovery import describe_table, raise_unknown_table
-from fastmcp.exceptions import ToolError
 
 
 def _db_url(name: str) -> str:
@@ -71,13 +71,45 @@ async def test_hidden_and_nonexistent_share_helper(
     # 'does_not_exist' is absent entirely
     httpx_mock.add_response(
         url=_db_url("sglawwatch"),
-        json={"tables": [
-            {"name": "metadata", "hidden": False, "count": None, "columns": [], "primary_keys": []},
-            {"name": "schema_versions", "hidden": False, "count": None, "columns": [], "primary_keys": []},
-            {"name": "_zeeker_schemas", "hidden": False, "count": None, "columns": [], "primary_keys": []},
-            {"name": "_zeeker_updates", "hidden": False, "count": None, "columns": [], "primary_keys": []},
-            {"name": "headlines", "hidden": False, "count": 712, "columns": ["title"], "primary_keys": []},
-        ]},
+        json={
+            "tables": [
+                {
+                    "name": "metadata",
+                    "hidden": False,
+                    "count": None,
+                    "columns": [],
+                    "primary_keys": [],
+                },
+                {
+                    "name": "schema_versions",
+                    "hidden": False,
+                    "count": None,
+                    "columns": [],
+                    "primary_keys": [],
+                },
+                {
+                    "name": "_zeeker_schemas",
+                    "hidden": False,
+                    "count": None,
+                    "columns": [],
+                    "primary_keys": [],
+                },
+                {
+                    "name": "_zeeker_updates",
+                    "hidden": False,
+                    "count": None,
+                    "columns": [],
+                    "primary_keys": [],
+                },
+                {
+                    "name": "headlines",
+                    "hidden": False,
+                    "count": 712,
+                    "columns": ["title"],
+                    "primary_keys": [],
+                },
+            ]
+        },
         is_reusable=True,
     )
 
@@ -122,10 +154,24 @@ async def test_no_upstream_zeeker_schemas_call_on_unknown(
     """D2-16: error path makes no upstream _zeeker_schemas calls — cache-only paths."""
     httpx_mock.add_response(
         url=_db_url("sglawwatch"),
-        json={"tables": [
-            {"name": "metadata", "hidden": False, "count": None, "columns": [], "primary_keys": []},
-            {"name": "headlines", "hidden": False, "count": 712, "columns": ["title"], "primary_keys": []},
-        ]},
+        json={
+            "tables": [
+                {
+                    "name": "metadata",
+                    "hidden": False,
+                    "count": None,
+                    "columns": [],
+                    "primary_keys": [],
+                },
+                {
+                    "name": "headlines",
+                    "hidden": False,
+                    "count": 712,
+                    "columns": ["title"],
+                    "primary_keys": [],
+                },
+            ]
+        },
         is_reusable=True,
     )
 
@@ -135,12 +181,10 @@ async def test_no_upstream_zeeker_schemas_call_on_unknown(
         await describe_table("sglawwatch", "does_not_exist")
 
     # No _zeeker_schemas request was made on either error path
-    zeeker_schema_reqs = [
-        r for r in httpx_mock.get_requests()
-        if "_zeeker_schemas" in str(r.url)
-    ]
+    zeeker_schema_reqs = [r for r in httpx_mock.get_requests() if "_zeeker_schemas" in str(r.url)]
     assert len(zeeker_schema_reqs) == 0, (
-        f"Expected no _zeeker_schemas calls on error path, got: {[str(r.url) for r in zeeker_schema_reqs]}"
+        "Expected no _zeeker_schemas calls on error path, got: "
+        f"{[str(r.url) for r in zeeker_schema_reqs]}"
     )
 
 
@@ -155,7 +199,8 @@ async def test_unknown_database_does_not_call_get_database(
 
     # No requests to any /{db}.json should have been made
     db_reqs = [
-        r for r in httpx_mock.get_requests()
+        r
+        for r in httpx_mock.get_requests()
         if r.url.path.endswith(".json") and "metadata" not in r.url.path
     ]
     assert len(db_reqs) == 0, (

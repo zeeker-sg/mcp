@@ -3,8 +3,8 @@ Search tool handler — cross-database FTS preview rows (D-01 / D4-15 / D4-19).
 
 D-01: Per-domain grouping. The single Phase 4 search handler lives here; the
 orchestrator (`core.search.fan_out_search`) and the pure helpers
-(`core.search.resolve_preview_columns`, `core.fts_escape.escape_fts5`) live in
-`core/` per the cross-`tools/` discipline.
+(`core.search.resolve_preview_columns`, `core.fts_escape.escape_user_query`)
+live in `core/` per the cross-`tools/` discipline.
 
 D4-19: Validation order (9 steps):
   1. empty-query gate (strip() check BEFORE escape — Pitfall 2 prevents the
@@ -15,7 +15,12 @@ D4-19: Validation order (9 steps):
   4. unknown_database check per requested DB (D4-10)
   5. auto-discovery + preview-resolution per sorted DB (D4-02 / D4-12)
   6. empty-target short-circuit → empty envelope (D4-03)
-  7. escape_fts5 wrap (D4-08)
+  7. FTS5 escape (D4-08) — escape_user_query on the ranked modes (phrase-
+     intent dispatch between escape_fts5 for quoted queries and
+     escape_fts5_terms for term-level implicit AND, per issue #12);
+     escape_fts5 phrase wrap when SEARCH_RANKING="legacy" so the legacy
+     flag reproduces the pre-#12 behavior byte-identically (the eval's A0
+     baseline). Every FTS5 operator is neutralized on both paths.
   8. fan_out_search dispatch (D4-05 / D4-06)
   9. all-fail mapping (D4-09 case (c) — all-400 → invalid_query; otherwise
      upstream_unavailable) + D4-13 defense-in-depth post-filter + envelope
@@ -47,9 +52,11 @@ from pydantic import BeforeValidator, Field
 
 from mcp_zeeker import config
 from mcp_zeeker.core.envelope import Envelope
-from mcp_zeeker.core.fts_escape import escape_fts5
+from mcp_zeeker.core.fts_escape import escape_fts5, escape_user_query
 from mcp_zeeker.core.search import (
+    FragmentSource,
     fan_out_search,
+    fragment_sources_for,
     searchable_tables_for,
 )
 from mcp_zeeker.core.visibility import (
@@ -64,10 +71,11 @@ from mcp_zeeker.tools._param_coercion import _coerce_json_list
 log = structlog.get_logger()
 
 
-# D4-15 verbatim — ends with config.TOOL_TRAILER (INJ-01 / ANNO-02), mentions
-# auto-discovery semantics, preview-field null possibility, heavy-text
-# exclusion, round-robin bias, drill-down hint, default/max limits, and the
-# anonymous-tier rate-limit literal (ANNO-03).
+# D4-15 (as amended by issue #12) — ends with config.TOOL_TRAILER (INJ-01 /
+# ANNO-02), mentions auto-discovery semantics, preview-field null possibility,
+# heavy-text exclusion, relevance ranking (BM25 within sources + reciprocal-
+# rank fusion across sources — issue #12 Phase 2), drill-down hint,
+# default/max limits, and the anonymous-tier rate-limit literal (ANNO-03).
 _SEARCH_DESCRIPTION = (
     "Full-text search across Singapore legal databases on data.zeeker.sg. "
     "Searchable tables are auto-discovered from upstream FTS metadata; "
@@ -75,8 +83,10 @@ _SEARCH_DESCRIPTION = (
     "Returns preview rows with title, date, summary, url, database, table — "
     "any field except database/table may be null when the source table doesn't "
     "have a matching column. Heavy text columns are never inlined. "
-    "Results are merged round-robin across searchable tables (databases with more "
-    "tables get more slots in top results — use the `databases` parameter to scope). "
+    "Results are relevance-ranked: BM25 scoring within each source table, then "
+    "reciprocal-rank fusion merges the per-table rankings into one list (a "
+    "document surfacing in multiple sources ranks higher — use the `databases` "
+    "parameter to scope). "
     "When pagination.upstream_total_hits exceeds returned counts, narrow the query "
     "or follow up with query_table to drill into a specific table. "
     "Default limit 20, max 100. "
@@ -129,7 +139,8 @@ async def search(
       5. auto-discover + preview-resolve per sorted DB (alphabetical → deterministic
          round-robin)
       6. empty target_tables → empty envelope (multi-DB provenance)
-      7. escape_fts5(query)
+      7. FTS5 escape — escape_fts5 on legacy (pre-#12 byte-identical),
+         escape_user_query phrase-intent dispatch on ranked modes (issue #12)
       8. fan_out_search dispatch (concurrent + 0.8s outer budget)
       9. all-fail mapping (all-400 → invalid_query / otherwise → upstream_unavailable)
      10. D4-13 defense-in-depth post-filter (race-condition guard)
@@ -157,9 +168,10 @@ async def search(
             raise_unknown_database(db)
 
     # Step 5: auto-discovery + preview-resolve per sorted DB (D4-02 / D4-12).
-    # Alphabetical-DB iteration gives deterministic round-robin merge ordering
-    # (D4-05 / 04-RESEARCH §3.9); within each DB, searchable_tables_for preserves
-    # upstream metadata order.
+    # Alphabetical-DB iteration gives deterministic merge ordering — round-robin
+    # slot order on legacy/bm25, RRF tie-break stability on bm25_rrf (D4-05 /
+    # 04-RESEARCH §3.9 / issue #12 Phase 2); within each DB,
+    # searchable_tables_for preserves upstream metadata order.
     #
     # #6b / #9: Request-scoped memoization — fetch get_database(db) once per
     # DB and compute visible_tables from it. Pass both into
@@ -172,22 +184,36 @@ async def search(
     # as discovery (which is also what the race-guard wants).
     discovery_start = time.perf_counter()
     target_tables: list[tuple[str, str, dict[str, str | None]]] = []
+    # Issue #12: per-table FTS discovery metadata for the BM25 SQL path —
+    # (fts_table, fts_columns in FTS index order), derived by
+    # searchable_tables_for from the SAME summary (no extra round-trips).
+    fts_info: dict[tuple[str, str], tuple[str, list[str]]] = {}
     # Per-DB visible-table sets from discovery snapshot; reused in post-filter.
     discovery_visible: dict[str, set[str]] = {}
+    # Issue #12 Phase 3: fragment passage-search sources (MaxP rollup —
+    # rows surface as PARENT rows). fragment_sources_for returns [] in
+    # legacy mode, so the pre-#12 denylist behavior is unchanged there.
+    fragment_sources: list[tuple[str, FragmentSource]] = []
     for db in sorted(target_dbs):
         summary = await _get_database_summary(db)
         hidden_set = config.HIDDEN_TABLES.get(db, set())
         visible = {t.name for t in summary.tables if not t.hidden and t.name not in hidden_set}
         discovery_visible[db] = visible
         discovered = await searchable_tables_for(db, summary=summary, visible=visible)
-        for table, preview in discovered:
+        for table, preview, fts_table, fts_columns in discovered:
             target_tables.append((db, table, preview))
+            fts_info[(db, table)] = (fts_table, fts_columns)
+        # Same summary/visible snapshot — no extra round-trips (#6b / #9).
+        for source in await fragment_sources_for(db, summary=summary, visible=visible):
+            fragment_sources.append((db, source))
     discovery_ms = int((time.perf_counter() - discovery_start) * 1000)
 
     # Step 6: empty-target short-circuit (D4-03 — multi-DB provenance applies).
     # This is the documented "this DB has no FTS" path; the description tells the
     # LLM the response is honest (empty rows + empty upstream_total_hits).
-    if not target_tables:
+    # Issue #12 Phase 3: fragment sources count as dispatch targets too — a
+    # body-only-indexed corpus (parent without its own fts) must still fan out.
+    if not target_tables and not fragment_sources:
         # #6a / #8: emit timing even on short-circuit so the event is always
         # present for a search call (fan_out_ms and post_filter_ms are 0).
         log.info(
@@ -203,17 +229,32 @@ async def search(
             failed_tables=0,
         )
 
-    # Step 7: FTS5 phrase-wrap escape (D4-08). escape_fts5 is the SOLE escape
+    # Step 7: FTS5 escape (D4-08 / issue #12). This is the SOLE escape
     # call-site in the handler — the orchestrator passes the escaped string
     # through to upstream without re-wrapping.
-    escaped = escape_fts5(query)
+    # - SEARCH_RANKING="legacy": escape_fts5 phrase wrap, byte-identical to
+    #   the pre-#12 behavior (the flag is the rollback path and the eval's A0
+    #   baseline — it must reproduce today's semantics exactly).
+    # - ranked modes ("bm25"/"bm25_rrf"): escape_user_query phrase-intent
+    #   dispatch — a query enclosed in double quotes is an explicit phrase
+    #   (escape_fts5 on the inner text, adjacency required); anything else is
+    #   escaped term-by-term (escape_fts5_terms — FTS5 implicit AND, adjacency
+    #   NOT required, letting bm25() rank partial proximity).
+    # Every FTS5 operator is neutralized on both paths.
+    if config.SEARCH_RANKING == "legacy":
+        escaped = escape_fts5(query)
+    else:
+        escaped = escape_user_query(query)
 
     # Step 8: concurrent fan-out (D4-05 / D4-06). Per-table fetch quota equals
     # `limit` per D4-05; the round-robin merge inside fan_out_search already
-    # slices to `per_table_limit` as belt-and-suspenders.
+    # slices to `per_table_limit` as belt-and-suspenders. Issue #12: fts_info
+    # routes tables through the BM25 SQL path when SEARCH_RANKING != "legacy";
+    # Phase 3: fragment_sources adds MaxP passage lists to the same fan-out
+    # (same semaphore + 0.8s budget — no extra latency budget).
     fan_out_start = time.perf_counter()
     rows, upstream_total_hits, failed_tables, failure_statuses = await fan_out_search(
-        escaped, target_tables, limit
+        escaped, target_tables, limit, fts_info, fragment_sources
     )
     fan_out_ms = int((time.perf_counter() - fan_out_start) * 1000)
 
@@ -224,8 +265,10 @@ async def search(
     #     in production given the escape contract — RESEARCH §3.6).
     #   - any other status (5xx, transport, mixed) → upstream_unavailable.
     # The 400-only path uses the sole-emission helper to preserve counter-patch
-    # identity (D4-09 / D2-15).
-    if failed_tables == len(target_tables) and failed_tables > 0:
+    # identity (D4-09 / D2-15). Issue #12 Phase 3: fragment sources are
+    # dispatch targets too, so "every dispatched target failed" counts them.
+    dispatched = len(target_tables) + len(fragment_sources)
+    if failed_tables == dispatched and failed_tables > 0:
         if all(s == 400 for s in failure_statuses):
             raise_invalid_query()
         # Fixed-literal message — INJ-05; no query string echoed.

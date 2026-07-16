@@ -155,9 +155,7 @@ def compile_filters(
                 # do not pick the rounding rule for them. `bool` is checked
                 # first because `isinstance(True, int)` is True in Python.
                 if isinstance(f.value, bool) or isinstance(f.value, float):
-                    raise ToolError(
-                        "invalid_filter_op: value not coercible for operator"
-                    ) from None
+                    raise ToolError("invalid_filter_op: value not coercible for operator") from None
                 try:
                     coerced: int | float = int(f.value)
                 except (TypeError, ValueError):

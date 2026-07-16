@@ -53,7 +53,7 @@ class ColumnInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    type: str          # SQLite affinity type: TEXT, INTEGER, REAL, BLOB, NUMERIC
+    type: str  # SQLite affinity type: TEXT, INTEGER, REAL, BLOB, NUMERIC
     description: str = ""
 
 

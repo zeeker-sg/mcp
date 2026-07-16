@@ -215,9 +215,7 @@ class RateLimitMiddleware:
         )
         await response(scope, receive, send)
 
-    def _check_bucket(
-        self, key: str, now_mono: float, now_utc: datetime
-    ) -> tuple[bool, int]:
+    def _check_bucket(self, key: str, now_mono: float, now_utc: datetime) -> tuple[bool, int]:
         """Token-bucket + daily-counter decision.
 
         Returns (allowed, retry_after_seconds). retry_after_seconds is 0 on
@@ -284,9 +282,7 @@ class RateLimitMiddleware:
         07-RESEARCH.md § Retry-After Arithmetic — UTC has no DST and leap
         seconds are absorbed by datetime.now(tz=UTC) at the OS level.
         """
-        tomorrow = (now_utc + timedelta(days=1)).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        tomorrow = (now_utc + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         return max(1, math.ceil((tomorrow - now_utc).total_seconds()))
 
     def _effective_ttl(self, bucket: BucketState, now_utc: datetime) -> float:
@@ -308,13 +304,9 @@ class RateLimitMiddleware:
             )
         return self._idle_ttl_seconds
 
-    def _is_expired(
-        self, bucket: BucketState, now_mono: float, now_utc: datetime
-    ) -> bool:
+    def _is_expired(self, bucket: BucketState, now_mono: float, now_utc: datetime) -> bool:
         """True iff bucket has been idle longer than its effective TTL."""
-        return (now_mono - bucket.last_seen_ts) > self._effective_ttl(
-            bucket, now_utc
-        )
+        return (now_mono - bucket.last_seen_ts) > self._effective_ttl(bucket, now_utc)
 
     def _sweep(self, now_mono: float, now_utc: datetime) -> None:
         """Idle-TTL eviction pass — drop buckets idle past their effective TTL.
@@ -353,8 +345,6 @@ class RateLimitMiddleware:
         """
         if len(self._store) >= self._store_cap:
             evict_count = max(1, len(self._store) // 100)
-            by_age = sorted(
-                self._store, key=lambda k: self._store[k].last_seen_ts
-            )
+            by_age = sorted(self._store, key=lambda k: self._store[k].last_seen_ts)
             for key in by_age[:evict_count]:
                 del self._store[key]

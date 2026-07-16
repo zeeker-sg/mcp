@@ -13,8 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from scripts.soak.report import _load_rss
 
 
