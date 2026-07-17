@@ -220,7 +220,7 @@ async def test_execute_sql_error_contract(
 
 _FTS_INFO = {("dbA", "t1"): ("t1_fts", ["title", "summary"])}
 
-_TEN_KEYS = {
+_ROW_KEYS = {
     "title",
     "date",
     "summary",
@@ -231,15 +231,18 @@ _TEN_KEYS = {
     "license_url",
     "_citation",
     "_score",
+    "match_context",
 }
+# Back-compat alias — several tests below reference the historical name.
+_TEN_KEYS = _ROW_KEYS
 
 
 async def test_sql_path_rows_normalized_with_score(
     datasette_client, httpx_mock: pytest_httpx.HTTPXMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """SQL path: normalized rows carry exactly the 10 keys, `_score` is the raw
-    negative bm25 float, `_total` is stripped from rows and surfaced as the
-    per-table upstream total."""
+    """SQL path: normalized rows carry exactly the fixed key set, `_score` is
+    the raw negative bm25 float, `_total` is stripped from rows and surfaced
+    as the per-table upstream total."""
     monkeypatch.setattr(config, "SEARCH_RANKING", "bm25")
     httpx_mock.add_response(
         url=_sql_url_re("dbA"),

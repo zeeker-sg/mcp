@@ -289,6 +289,29 @@ def _bm25_weight_literals(db: str, table: str, fts_columns: list[str]) -> list[s
     return literals
 
 
+def _snippet_expr(fts_quoted: str) -> str:
+    """FTS5 snippet() expression for the `match_context` extract.
+
+    `snippet(<fts>, -1, '', '', ' … ', N)`: column index -1 auto-selects the
+    best-matching indexed column; empty before/after markers (no highlight
+    markup — the extract is document text, never decorated); ' … ' ellipsis.
+    N comes from config.SEARCH_SNIPPET_TOKENS clamped to [1, 64] (the FTS5
+    ceiling) so a bad config value can never widen the extract. Every literal
+    here is server-controlled — the user query is never part of this
+    expression (INJ-05; it travels only as the bound :search_query).
+
+    Quotation-length by design: token cap here, char cap at normalization
+    (config.SEARCH_SNIPPET_MAX_CHARS) — the fair-dealing posture that lets
+    `match_context` coexist with process-only content policies (the extract
+    shows WHY a row matched; it does not redistribute document text).
+    """
+    tokens = config.SEARCH_SNIPPET_TOKENS
+    if not isinstance(tokens, int) or isinstance(tokens, bool):
+        tokens = 24
+    tokens = max(1, min(64, tokens))
+    return f"snippet({fts_quoted}, -1, '', '', ' … ', {tokens})"
+
+
 def _search_select_columns(
     db: str,
     table: str,
@@ -339,12 +362,26 @@ def build_bm25_sql(
         integer LIMIT.
 
     Shape:
-      SELECT <preview cols + citation-placeholder cols, table-qualified>,
-             bm25(<fts>, w1, ...) AS _score,
+      WITH m AS MATERIALIZED (
+        SELECT <preview cols + citation-placeholder cols, table-qualified>,
+               bm25(<fts>, w1, ...) AS _score,
+               snippet(<fts>, -1, '', '', ' … ', <tokens>) AS _snippet
+        FROM <fts> JOIN <table> ON <table>.rowid = <fts>.rowid
+        WHERE <fts> MATCH :search_query
+      )
+      SELECT <cols>, _score, _snippet,
              count(*) OVER () AS _total
-      FROM <fts> JOIN <table> ON <table>.rowid = <fts>.rowid
-      WHERE <fts> MATCH :search_query
-      ORDER BY _score ASC LIMIT <n>
+      FROM m ORDER BY _score ASC LIMIT <n>
+
+    - The CTE is LOAD-BEARING, not style: SQLite rejects FTS5 auxiliary
+      functions (bm25, snippet) in a SELECT that also contains a window
+      function — "unable to use function bm25 in the requested context"
+      (verified against SQLite 3.47; same illegal-context family as the
+      MaxP GROUP BY, see build_maxp_sql). The previous single-query shape
+      failed on EVERY dispatch. `AS MATERIALIZED` (SQLite ≥ 3.35) pins the
+      aux functions in a direct FTS query context; the window count and
+      ORDER BY/LIMIT run over the materialized rows. The executing-SQL
+      tests in tests/core/test_search_sql_executes.py guard this.
 
     - Weights are emitted in FTS-INDEX COLUMN ORDER (`fts_columns`), one per
       indexed column — bm25() is positional. Config lookup is
@@ -368,16 +405,22 @@ def build_bm25_sql(
 
     tq = _qi(table)
     fq = _qi(fts_table)
-    select_list = ", ".join(f"{tq}.{_qi(c)}" for c in select_cols)
+    inner_list = ", ".join(f"{tq}.{_qi(c)}" for c in select_cols)
+    outer_list = ", ".join(_qi(c) for c in select_cols)
     # Zero-arg fallback (fts_columns unknown): bm25(<fts>) uses default 1.0
     # weights — still valid SQL, still relevance-ordered.
     bm25_expr = f"bm25({fq}, {', '.join(weight_literals)})" if weight_literals else f"bm25({fq})"
     sql = (
-        f"SELECT {select_list}, "  # noqa: S608 — identifiers from upstream metadata only
+        f"WITH m AS MATERIALIZED ("  # noqa: S608 — identifiers from upstream metadata only
+        f"SELECT {inner_list}, "
         f"{bm25_expr} AS _score, "
-        f"count(*) OVER () AS _total "
+        f"{_snippet_expr(fq)} AS _snippet "
         f"FROM {fq} JOIN {tq} ON {tq}.rowid = {fq}.rowid "
-        f"WHERE {fq} MATCH :search_query "
+        f"WHERE {fq} MATCH :search_query"
+        f") "
+        f"SELECT {outer_list}, _score, _snippet, "
+        f"count(*) OVER () AS _total "
+        f"FROM m "
         f"ORDER BY _score ASC LIMIT {int(per_table_limit)}"
     )
     return sql, {"search_query": escaped_query}
@@ -509,20 +552,39 @@ def build_maxp_sql(
     bm25 weights and the integer LIMIT.
 
     Shape (MaxP: best passage per parent document):
-      SELECT p.<parent preview + citation-placeholder cols>,
-             MIN(bm25(<frag_fts>, w1, ...)) AS _score,
+      WITH m AS MATERIALIZED (
+        SELECT p.<parent preview + citation-placeholder cols>,
+               p.<parent_key> AS _pk,
+               bm25(<frag_fts>, w1, ...) AS _row_score,
+               snippet(<frag_fts>, -1, '', '', ' … ', <tokens>) AS _snippet
+        FROM <frag_fts>
+        JOIN <frag_table> fr ON fr.rowid = <frag_fts>.rowid
+        JOIN <parent> p ON p.<parent_key> = fr.<parent_link>
+        WHERE <frag_fts> MATCH :search_query
+      )
+      SELECT <cols>, _snippet,
+             MIN(_row_score) AS _score,
              count(*) OVER () AS _total
-      FROM <frag_fts>
-      JOIN <frag_table> fr ON fr.rowid = <frag_fts>.rowid
-      JOIN <parent> p ON p.<parent_key> = fr.<parent_link>
-      WHERE <frag_fts> MATCH :search_query
-      GROUP BY p.<parent_key>
-      ORDER BY _score ASC LIMIT <n>
+      FROM m GROUP BY _pk ORDER BY _score ASC LIMIT <n>
 
-    - bm25() is NEGATIVE (best = most negative) → MIN() picks each parent's
-      BEST passage score (that's the MaxP), and ORDER BY ASC ranks parents.
-    - The bare `p.*` select columns are constant per group (grouped by the
-      parent pk), so the GROUP BY projection is well-defined.
+    - The CTE is LOAD-BEARING, not style: FTS5 auxiliary functions (bm25,
+      snippet) are only legal in a direct full-text query context. The
+      previous single-query shape — `MIN(bm25(<fts>, ...))` under a joined
+      GROUP BY — is rejected by SQLite with "unable to use function bm25 in
+      the requested context" (verified against SQLite 3.47; the restriction
+      is not version-specific), so every fragment dispatch 400'd upstream.
+      `AS MATERIALIZED` (SQLite ≥ 3.35) pins the aux functions inside the
+      per-row FTS query and blocks the flattener from re-creating the
+      illegal grouped context. The executing-SQL tests in
+      tests/core/test_search_sql_executes.py guard this against regression.
+    - bm25() is NEGATIVE (best = most negative) → MIN(_row_score) picks each
+      parent's BEST passage score (that's the MaxP), and ORDER BY ASC ranks
+      parents.
+    - Bare columns in the outer min() aggregate take their values from the
+      row that produced the minimum (documented SQLite behavior for a sole
+      min()/max() aggregate) — so `_snippet` is the extract from each
+      parent's BEST-matching passage, and the parent preview columns are
+      constant per group anyway (grouped by the parent pk).
     - `count(*) OVER ()` runs AFTER grouping and BEFORE LIMIT → the number of
       DISTINCT matched parent documents, surfaced as the per-source upstream
       total under the "<db>.<fragment_table>" key (no second round-trip).
@@ -531,6 +593,8 @@ def build_maxp_sql(
       body column, so the default is the norm. [] → zero-arg bm25(<fts>).
     - SELECT columns resolve against the PARENT table (preview + citation
       placeholders, heavy-filtered) via the shared `_search_select_columns`.
+      The pk travels through the CTE under the reserved `_pk` alias so a pk
+      column that also appears in the select list can never collide.
     """
     weight_literals = _bm25_weight_literals(db, source.fragment_table, source.fragment_fts_columns)
     select_cols = _search_select_columns(db, source.parent_table, source.preview)
@@ -540,20 +604,50 @@ def build_maxp_sql(
     pq = _qi(source.parent_table)
     pk = _qi(source.parent_key)
     link = _qi(source.parent_link)
-    select_list = ", ".join(f"p.{_qi(c)}" for c in select_cols)
+    inner_list = ", ".join(f"p.{_qi(c)}" for c in select_cols)
+    outer_list = ", ".join(_qi(c) for c in select_cols)
     bm25_expr = f"bm25({fq}, {', '.join(weight_literals)})" if weight_literals else f"bm25({fq})"
     sql = (
-        f"SELECT {select_list}, "  # noqa: S608 — identifiers from config/upstream metadata only
-        f"MIN({bm25_expr}) AS _score, "
-        f"count(*) OVER () AS _total "
+        f"WITH m AS MATERIALIZED ("  # noqa: S608 — identifiers from config/upstream metadata only
+        f"SELECT {inner_list}, "
+        f"p.{pk} AS _pk, "
+        f"{bm25_expr} AS _row_score, "
+        f"{_snippet_expr(fq)} AS _snippet "
         f"FROM {fq} "
         f"JOIN {frq} fr ON fr.rowid = {fq}.rowid "
         f"JOIN {pq} p ON p.{pk} = fr.{link} "
-        f"WHERE {fq} MATCH :search_query "
-        f"GROUP BY p.{pk} "
+        f"WHERE {fq} MATCH :search_query"
+        f") "
+        f"SELECT {outer_list}, _snippet, "
+        f"MIN(_row_score) AS _score, "
+        f"count(*) OVER () AS _total "
+        f"FROM m "
+        f"GROUP BY _pk "
         f"ORDER BY _score ASC LIMIT {int(per_table_limit)}"
     )
     return sql, {"search_query": escaped_query}
+
+
+def _clean_snippet(raw: object) -> str | None:
+    """Normalize a raw upstream `_snippet` value for the `match_context` field.
+
+    Collapses internal whitespace (snippet() preserves source newlines/tabs)
+    and applies the config.SEARCH_SNIPPET_MAX_CHARS belt-and-suspenders cap —
+    the char-level guarantee that `match_context` stays quotation-length even
+    when snippet()'s token budget spans pathologically long tokens. Non-string
+    or empty values collapse to None so the row shape stays uniform.
+    """
+    if not isinstance(raw, str):
+        return None
+    cleaned = " ".join(raw.split())
+    if not cleaned:
+        return None
+    max_chars = config.SEARCH_SNIPPET_MAX_CHARS
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:
+        max_chars = 300
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars].rstrip() + " …"
+    return cleaned
 
 
 def _normalize_search_rows(
@@ -566,9 +660,13 @@ def _normalize_search_rows(
 ) -> list[dict]:
     """Normalize raw upstream rows to the fixed search row shape (D4-12 / D4-21).
 
-    Emits EXACTLY 10 keys per row (Phase 6 extended the original 6-key shape
+    Emits EXACTLY 11 keys per row (Phase 6 extended the original 6-key shape
     with license / license_url / citation per D6-03 + D6-05; issue #12 adds
-    `_score`). resolve_preview_columns already filtered HEAVY_COLUMNS at
+    `_score`; the match-context feature adds `match_context` — a
+    quotation-length FTS5 snippet() extract showing WHY the row matched,
+    char-capped via _clean_snippet, None on the legacy path and whenever
+    upstream returned no `_snippet`). resolve_preview_columns already
+    filtered HEAVY_COLUMNS at
     resolution time (defense-in-depth — D3-04 / D4-12 / Plan 04-01), so heavy
     columns cannot be inlined here even if upstream returned them. The
     whitelist reshape below naturally strips any extra upstream columns —
@@ -615,6 +713,12 @@ def _normalize_search_rows(
                 # Issue #12: raw negative bm25 score (best = most negative);
                 # None on the legacy path (no ranking signal upstream).
                 "_score": float(raw_score) if raw_score is not None else None,
+                # Quotation-length snippet() extract showing why the row
+                # matched (best-matching indexed column; best passage on the
+                # fragment path). None on legacy (no SQL context upstream).
+                # This is upstream DOCUMENT TEXT — the envelope's data-not-
+                # instructions labeling covers it like every other text field.
+                "match_context": _clean_snippet(r.get("_snippet")) if scored else None,
                 # D6-03: per-row license + license_url. Empty-string license_url
                 # collapses to None for clean wire payload.
                 "license": license_text,

@@ -306,10 +306,11 @@ async def test_default_databases_searches_all_four(
 
 async def test_preview_shape_uniform(datasette_client, httpx_mock: pytest_httpx.HTTPXMock) -> None:
     """SEARCH-04 / D4-21 + Phase 6 D6-03 / D6-05 + issue #12: every row in
-    envelope.data has exactly the 10 preview keys — the original 6 preview
-    keys, the Phase 6 additions (per-row license, license_url, citation), and
-    the issue #12 `_score` (raw bm25 float on the SQL-ranked path; None on
-    legacy so the shape stays uniform)."""
+    envelope.data has exactly the 11 preview keys — the original 6 preview
+    keys, the Phase 6 additions (per-row license, license_url, citation), the
+    issue #12 `_score` (raw bm25 float on the SQL-ranked path; None on
+    legacy so the shape stays uniform), and `match_context` (quotation-length
+    snippet() extract on the SQL-ranked paths; None on legacy)."""
     from mcp_zeeker.tools.search import search
 
     _stub_four_dbs(httpx_mock)
@@ -333,6 +334,8 @@ async def test_preview_shape_uniform(datasette_client, httpx_mock: pytest_httpx.
         "_citation",
         # Issue #12: relevance score — None on the legacy path.
         "_score",
+        # Quotation-length snippet() extract — None on the legacy path.
+        "match_context",
     }
     for row in envelope.data:
         assert set(row.keys()) == expected_keys, (
