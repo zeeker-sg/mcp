@@ -11,7 +11,8 @@ D4-19: Validation order (9 steps):
      empty `""` FTS5 syntax error upstream)
   2. limit clamp belt-and-suspenders (D4-11 — Pydantic Field(ge=1, le=100) is
      primary; direct-caller path bypasses it)
-  3. databases default (D4-10 — None / empty list → all ALLOWED_DATABASES)
+  3. databases default (D4-10 as amended — None / empty list →
+     SEARCH_DEFAULT_DATABASES core scope; specialist DBs are explicit-only)
   4. unknown_database check per requested DB (D4-10)
   5. auto-discovery + preview-resolution per sorted DB (D4-02 / D4-12)
   6. empty-target short-circuit → empty envelope (D4-03)
@@ -78,6 +79,12 @@ log = structlog.get_logger()
 # default/max limits, and the anonymous-tier rate-limit literal (ANNO-03).
 _SEARCH_DESCRIPTION = (
     "Full-text search across Singapore legal databases on data.zeeker.sg. "
+    "By default searches the core corpora only: zeeker-judgements (court "
+    "judgments) and sglawwatch (legal commentaries and headlines). Two "
+    "specialist databases are searched ONLY when explicitly listed in "
+    "`databases`: pdpc (PDPC enforcement decisions and guidance — use for "
+    "personal-data/PDPA questions) and sg-gov-newsrooms (government agency "
+    "press releases). "
     "Searchable tables are auto-discovered from upstream FTS metadata; "
     "databases without a full-text index upstream are silently skipped. "
     "Returns preview rows with title, date, summary, url, database, table — "
@@ -117,8 +124,11 @@ async def search(
         Field(
             default=None,
             description=(
-                "Optional subset of databases to search. Defaults to all "
-                "configured databases. Pass empty list for same effect as None."
+                "Optional list of databases to search. Omitted (or empty) "
+                "searches the default core scope: zeeker-judgements + "
+                "sglawwatch. List databases explicitly to reach the "
+                "specialist corpora (pdpc, sg-gov-newsrooms) or to narrow "
+                "to a single database."
             ),
         ),
     ] = None,
@@ -137,7 +147,8 @@ async def search(
     Validation order (D4-19):
       1. empty/whitespace query → invalid_query (BEFORE escape — Pitfall 2)
       2. limit out-of-range → invalid_query (belt-and-suspenders past Pydantic)
-      3. databases default → all ALLOWED_DATABASES when None/empty
+      3. databases default → SEARCH_DEFAULT_DATABASES (core scope) when
+         None/empty; specialist DBs require an explicit list
       4. unknown_database per requested DB
       5. auto-discover + preview-resolve per sorted DB (alphabetical → deterministic
          round-robin)
@@ -160,9 +171,15 @@ async def search(
     if limit < 1 or limit > 100:
         raise_invalid_query()
 
-    # Step 3: databases default (D4-10 — None or empty list both fall back to
-    # the configured ALLOWED_DATABASES tuple).
-    target_dbs = list(databases) if databases else list(config.ALLOWED_DATABASES)
+    # Step 3: databases default (D4-10 as amended — None or empty list both
+    # fall back to SEARCH_DEFAULT_DATABASES, the crown-jewel core scope, NOT
+    # all of ALLOWED_DATABASES: the default fan-out previously dispatched
+    # ~17 upstream queries and the specialist tables starved the judgments
+    # dispatch under the shared 0.8s budget. Specialist databases (pdpc,
+    # sg-gov-newsrooms) are reachable by listing them explicitly; the tool
+    # description advertises this. Explicit lists still validate against
+    # ALLOWED_DATABASES in Step 4.
+    target_dbs = list(databases) if databases else list(config.SEARCH_DEFAULT_DATABASES)
 
     # Step 4: unknown_database per requested DB (D4-10 — sole-emission helper
     # from Phase 1).

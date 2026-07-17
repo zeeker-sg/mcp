@@ -151,13 +151,22 @@ def _sglawwatch_db_payload() -> dict:
 
 
 def _stub_four_dbs(httpx_mock: pytest_httpx.HTTPXMock) -> None:
-    """Stub the four ALLOWED_DATABASES /{db}.json responses."""
+    """Stub the four ALLOWED_DATABASES /{db}.json responses.
+
+    The specialist DBs (pdpc, sg-gov-newsrooms) are `is_optional` — the
+    default search scope is SEARCH_DEFAULT_DATABASES, so unscoped tests
+    never fetch them; scoped tests still match against these stubs."""
     httpx_mock.add_response(
         url=_db_url("zeeker-judgements"), json=_judgments_db_payload(), is_reusable=True
     )
-    httpx_mock.add_response(url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True)
     httpx_mock.add_response(
-        url=_db_url("sg-gov-newsrooms"), json=_sg_gov_db_payload(), is_reusable=True
+        url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True, is_optional=True
+    )
+    httpx_mock.add_response(
+        url=_db_url("sg-gov-newsrooms"),
+        json=_sg_gov_db_payload(),
+        is_reusable=True,
+        is_optional=True,
     )
     httpx_mock.add_response(
         url=_db_url("sglawwatch"), json=_sglawwatch_db_payload(), is_reusable=True
@@ -267,7 +276,10 @@ def _commentaries_search_rows(n: int = 1, filtered_count: int = 5) -> dict:
 
 
 def _stub_per_table_responses(httpx_mock: pytest_httpx.HTTPXMock) -> None:
-    """Stub /{db}/{table}.json for each searchable table."""
+    """Stub /{db}/{table}.json for each searchable table.
+
+    acra_news is `is_optional` — it lives in a specialist DB outside the
+    default search scope, so only explicitly-scoped tests fetch it."""
     httpx_mock.add_response(
         url=_table_url_re("zeeker-judgements", "judgments"),
         json=_judgments_search_rows(),
@@ -277,6 +289,7 @@ def _stub_per_table_responses(httpx_mock: pytest_httpx.HTTPXMock) -> None:
         url=_table_url_re("sg-gov-newsrooms", "acra_news"),
         json=_acra_search_rows(),
         is_reusable=True,
+        is_optional=True,
     )
     httpx_mock.add_response(
         url=_table_url_re("sglawwatch", "commentaries"),
@@ -285,11 +298,15 @@ def _stub_per_table_responses(httpx_mock: pytest_httpx.HTTPXMock) -> None:
     )
 
 
-async def test_default_databases_searches_all_four(
+async def test_default_databases_core_scope_only(
     datasette_client, httpx_mock: pytest_httpx.HTTPXMock
 ) -> None:
-    """SEARCH-02 / D4-10: search(query='x') with no databases= dispatches per-table
-    FTS for all 4 ALLOWED_DATABASES (pdpc returns 0 naturally because no FTS)."""
+    """SEARCH-02 / D4-10 as amended: search(query='x') with no databases=
+    dispatches ONLY the SEARCH_DEFAULT_DATABASES core scope (zeeker-judgements
+    + sglawwatch). The specialist DBs (pdpc, sg-gov-newsrooms) are neither
+    discovered nor dispatched — no upstream traffic at all — until listed
+    explicitly."""
+    from mcp_zeeker import config
     from mcp_zeeker.tools.search import search
 
     _stub_four_dbs(httpx_mock)
@@ -297,11 +314,38 @@ async def test_default_databases_searches_all_four(
 
     envelope = await search(query="appeal")
 
-    # Rows came in.
+    # Rows came in from the core scope.
     assert len(envelope.data) >= 1
-    # pdpc has no FTS — must NOT appear in upstream_total_hits keys.
-    pdpc_keys = [k for k in envelope.pagination.upstream_total_hits if k.startswith("pdpc.")]
-    assert pdpc_keys == [], f"pdpc must not appear in upstream_total_hits: {pdpc_keys}"
+    hit_dbs = {k.split(".")[0] for k in envelope.pagination.upstream_total_hits}
+    assert hit_dbs <= set(config.SEARCH_DEFAULT_DATABASES), (
+        f"specialist DB leaked into default scope: {hit_dbs}"
+    )
+    # No upstream request touched a specialist DB — not even discovery.
+    for req in httpx_mock.get_requests():
+        assert "/pdpc" not in req.url.path and "/sg-gov-newsrooms" not in req.url.path
+
+
+async def test_explicit_databases_reach_specialist_scope(
+    datasette_client, httpx_mock: pytest_httpx.HTTPXMock
+) -> None:
+    """The specialist DBs stay fully searchable when listed explicitly —
+    databases=['sg-gov-newsrooms'] dispatches its tables and surfaces hits.
+    Stubs only sg-gov-newsrooms (scoped search touches nothing else)."""
+    from mcp_zeeker.tools.search import search
+
+    httpx_mock.add_response(
+        url=_db_url("sg-gov-newsrooms"), json=_sg_gov_db_payload(), is_reusable=True
+    )
+    httpx_mock.add_response(
+        url=_table_url_re("sg-gov-newsrooms", "acra_news"),
+        json=_acra_search_rows(),
+        is_reusable=True,
+    )
+
+    envelope = await search(query="appeal", databases=["sg-gov-newsrooms"])
+
+    assert envelope.pagination.upstream_total_hits == {"sg-gov-newsrooms.acra_news": 32}
+    assert all(row["database"] == "sg-gov-newsrooms" for row in envelope.data)
 
 
 async def test_preview_shape_uniform(datasette_client, httpx_mock: pytest_httpx.HTTPXMock) -> None:
@@ -383,7 +427,9 @@ async def test_upstream_total_hits_populated(
     datasette_client, httpx_mock: pytest_httpx.HTTPXMock
 ) -> None:
     """D4-17: envelope.pagination.upstream_total_hits keyed `<db>.<table>` and
-    populated from each per-table `filtered_table_rows_count`."""
+    populated from each per-table `filtered_table_rows_count`. Scopes
+    explicitly across core + specialist DBs so the multi-DB keying is
+    exercised despite the narrower default scope."""
     from mcp_zeeker.tools.search import search
 
     _stub_four_dbs(httpx_mock)
@@ -404,7 +450,10 @@ async def test_upstream_total_hits_populated(
         is_reusable=True,
     )
 
-    envelope = await search(query="appeal")
+    envelope = await search(
+        query="appeal",
+        databases=["zeeker-judgements", "sg-gov-newsrooms", "sglawwatch"],
+    )
     totals = envelope.pagination.upstream_total_hits
     assert totals.get("zeeker-judgements.judgments") == 219
     assert totals.get("sg-gov-newsrooms.acra_news") == 32

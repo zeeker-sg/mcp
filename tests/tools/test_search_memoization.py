@@ -131,12 +131,19 @@ def _pdpc_db_payload() -> dict:
 
 
 def _stub_all_dbs(httpx_mock: pytest_httpx.HTTPXMock) -> None:
+    # Specialist DBs are is_optional — the default search scope
+    # (SEARCH_DEFAULT_DATABASES) no longer fetches them.
     httpx_mock.add_response(
         url=_db_url("zeeker-judgements"), json=_judgments_db_payload(), is_reusable=True
     )
-    httpx_mock.add_response(url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True)
     httpx_mock.add_response(
-        url=_db_url("sg-gov-newsrooms"), json=_sg_gov_db_payload(), is_reusable=True
+        url=_db_url("pdpc"), json=_pdpc_db_payload(), is_reusable=True, is_optional=True
+    )
+    httpx_mock.add_response(
+        url=_db_url("sg-gov-newsrooms"),
+        json=_sg_gov_db_payload(),
+        is_reusable=True,
+        is_optional=True,
     )
     httpx_mock.add_response(
         url=_db_url("sglawwatch"), json=_sglawwatch_db_payload(), is_reusable=True
@@ -159,7 +166,13 @@ def _stub_table_responses(httpx_mock: pytest_httpx.HTTPXMock) -> None:
         ("sg-gov-newsrooms", "ccs_news"),
         ("sglawwatch", "commentaries"),
     ]:
-        httpx_mock.add_response(url=_table_url_re(db, table), json=happy, is_reusable=True)
+        httpx_mock.add_response(
+            url=_table_url_re(db, table),
+            json=happy,
+            is_reusable=True,
+            # Specialist-DB tables never dispatch under the default scope.
+            is_optional=db not in config.SEARCH_DEFAULT_DATABASES,
+        )
 
 
 def _count_db_fetches(httpx_mock: pytest_httpx.HTTPXMock, db: str) -> int:

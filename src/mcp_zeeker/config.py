@@ -20,6 +20,22 @@ ALLOWED_DATABASES: tuple[str, ...] = (
     "sglawwatch",
 )
 
+# Default scope for the search tool when the caller omits `databases`.
+# Deliberately NARROWER than ALLOWED_DATABASES: the crown-jewel corpora
+# (court judgments, curated commentaries) get the whole fan-out latency
+# budget and all the result slots, instead of competing with ~9 small
+# specialist tables (pdpc + the 8 sg-gov-newsrooms feeds) that dilute both
+# and were observed starving the judgments dispatch under the 0.8s budget.
+# The specialist databases stay fully searchable — one explicit
+# `databases=["pdpc"]` away; the tool description advertises them so LLM
+# callers know to widen scope. MUST be a subset of ALLOWED_DATABASES
+# (the unknown_database gate validates against ALLOWED_DATABASES, so a
+# typo here would fail loudly, not silently).
+SEARCH_DEFAULT_DATABASES: tuple[str, ...] = (
+    "zeeker-judgements",
+    "sglawwatch",
+)
+
 DATABASE_DESCRIPTIONS: dict[str, str] = {
     "zeeker-judgements": (
         "Singapore court judgments — High Court, Court of Appeal, and subordinate courts."

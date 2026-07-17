@@ -113,9 +113,15 @@ async def test_fts_gate_drops_non_fts_table(
         ),
         is_reusable=True,
     )
-    # When databases=None (default), handler iterates all four — stub the others.
+    # When databases=None the handler iterates SEARCH_DEFAULT_DATABASES —
+    # sglawwatch is fetched; the specialist DBs are stubbed is_optional.
     for db in ("pdpc", "sg-gov-newsrooms", "sglawwatch"):
-        httpx_mock.add_response(url=_db_url(db), json=_empty_db_payload(), is_reusable=True)
+        httpx_mock.add_response(
+            url=_db_url(db),
+            json=_empty_db_payload(),
+            is_reusable=True,
+            is_optional=db not in config.SEARCH_DEFAULT_DATABASES,
+        )
 
     # Only t_fts is expected to be dispatched. Register exactly one per-table
     # response — preview-resolvable shape via `title` + `source_url`.
@@ -234,9 +240,11 @@ async def test_pdpc_no_dispatch(datasette_client, httpx_mock: pytest_httpx.HTTPX
       (a) With `databases=["pdpc"]` (explicit scope) → empty envelope and ZERO
           /pdpc/<table>?_search= URLs in the dispatch set (handler step 6
           short-circuit on empty target_tables).
-      (b) With the DEFAULT databases (all four) → still ZERO /pdpc/...?_search=
-          URLs (pdpc's tables all have fts_table=None per 04-RESEARCH Probe 2,
-          so searchable_tables_for("pdpc") returns ()).
+      (b) With the DEFAULT databases (SEARCH_DEFAULT_DATABASES core scope) →
+          still ZERO /pdpc/...?_search= URLs. Doubly guaranteed now: pdpc is
+          outside the default scope entirely, and even when explicitly scoped
+          its tables all have fts_table=None per 04-RESEARCH Probe 2, so
+          searchable_tables_for("pdpc") returns ().
 
     Captured fixture `pdpc__enforcement_decisions__search_ignored.json` proves
     that if dispatch DID happen, Datasette would silently return rowid-ordered
@@ -280,6 +288,8 @@ async def test_pdpc_no_dispatch(datasette_client, httpx_mock: pytest_httpx.HTTPX
             columns={"acra_news": ["title", "source_url"]},
         ),
         is_reusable=True,
+        # Specialist DB — outside the default search scope.
+        is_optional=True,
     )
     httpx_mock.add_response(
         url=_db_url("sglawwatch"),
@@ -304,7 +314,11 @@ async def test_pdpc_no_dispatch(datasette_client, httpx_mock: pytest_httpx.HTTPX
         url=_table_url_re("zeeker-judgements", "judgments"), json=happy_row, is_reusable=True
     )
     httpx_mock.add_response(
-        url=_table_url_re("sg-gov-newsrooms", "acra_news"), json=happy_row, is_reusable=True
+        url=_table_url_re("sg-gov-newsrooms", "acra_news"),
+        json=happy_row,
+        is_reusable=True,
+        # Specialist DB — outside the default search scope.
+        is_optional=True,
     )
     httpx_mock.add_response(
         url=_table_url_re("sglawwatch", "commentaries"), json=happy_row, is_reusable=True
@@ -322,7 +336,7 @@ async def test_pdpc_no_dispatch(datasette_client, httpx_mock: pytest_httpx.HTTPX
     assert envelope_pdpc_only.pagination.upstream_total_hits == {}
     assert envelope_pdpc_only.pagination.failed_tables == 0
 
-    # Path (b): default databases (all four) → still zero pdpc dispatches.
+    # Path (b): default databases (core scope) → still zero pdpc dispatches.
     envelope_all = await search(query="privacy")
     pdpc_search_reqs_all = [
         r for r in httpx_mock.get_requests() if "/pdpc/" in str(r.url) and "_search=" in str(r.url)
