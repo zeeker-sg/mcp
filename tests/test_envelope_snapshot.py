@@ -295,12 +295,14 @@ async def test_every_registered_tool_returns_envelope_with_correct_provenance(
         is_reusable=True,
     )
     # search tool dispatches per-DB FTS calls — also stub the t1 FTS path
-    # for every DB so the fan-out doesn't fail. Re-use empty rows.
+    # for every DB so the fan-out doesn't fail. Re-use empty rows. DBs
+    # outside SEARCH_DEFAULT_DATABASES are is_optional (default scope).
     for db in config.ALLOWED_DATABASES:
         httpx_mock.add_response(
             url=_table_url_re(db, "t1"),
             json=_empty_table_payload(),
             is_reusable=True,
+            is_optional=db not in config.SEARCH_DEFAULT_DATABASES,
         )
 
     tools = await mcp_client.list_tools()
