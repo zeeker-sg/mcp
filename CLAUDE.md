@@ -16,6 +16,7 @@ A read-only remote MCP server at `mcp.zeeker.sg` that exposes the curated Singap
 - **Anonymous-tier only in v1**: 20-request burst / 60 per minute / 5,000 per IP per 24h — Why: anonymous access keeps the connector trivially adoptable; upgrade path to API keys is a function-pointer swap.
 - **No data mirror**: Each tool call is a clean request/response cycle against upstream — Why: keeps the server stateless and avoids divergence from `data.zeeker.sg`.
 - **Submission target**: Must be acceptable into the default `.mcp.json` of at least one `claude-for-legal` plugin — Why: that's the distribution channel; non-negotiable for success.
+- **MCP spec version**: Targets the MCP spec 2025-06-18 (negotiated by FastMCP 3.4.x). The July 2026 stateless spec revision is adopted in substance (`stateless_http=True`, no session store, self-contained requests) but the formal FastMCP 4.x bump is gated on its stable release. Legacy clients performing `initialize` are fully supported during the transition.
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:research/STACK.md -->

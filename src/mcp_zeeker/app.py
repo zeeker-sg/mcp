@@ -53,7 +53,12 @@ async def _mcp_get_status(scope, receive, send):
             "headers": [(b"content-type", b"application/json")],
         }
     )
-    body = b'{"status":"ok","protocol":"2025-06-18","name":"zeeker"}'
+    # The July 28, 2026 MCP spec revision removes the initialize handshake and
+    # goes stateless-by-default. We advertise the spec version we target;
+    # FastMCP 3.4.x still negotiates the 2025-06-18 protocol for legacy clients
+    # that perform initialize. When we bump to FastMCP 4.x (stable pending),
+    # this string will update to the July-2026 revision version.
+    body = b'{"status":"ok","protocol":"2025-06-18","name":"zeeker","stateless":true}'
     await send({"type": "http.response.body", "body": body})
 
 

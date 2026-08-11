@@ -71,6 +71,9 @@ def test_constants_present():
     assert hasattr(config, "SESSION_START_FIELDS")
     assert isinstance(config.SESSION_START_FIELDS, tuple)
 
+    assert hasattr(config, "FIRST_REQUEST_FIELDS")
+    assert isinstance(config.FIRST_REQUEST_FIELDS, tuple)
+
 
 def test_allowed_databases_exact():
     """CFG-01: ALLOWED_DATABASES is the exact four names in exact order."""
@@ -110,6 +113,18 @@ def test_session_start_fields_locked():
     assert config.SESSION_START_FIELDS == (
         "request_id",
         "ip_prefix",
+        "protocol_version",
+        "client_name",
+        "client_version",
+    )
+
+
+def test_first_request_fields_locked():
+    """Stateless-spec migration: FIRST_REQUEST_FIELDS is the locked exact tuple."""
+    assert config.FIRST_REQUEST_FIELDS == (
+        "request_id",
+        "ip_prefix",
+        "method",
         "protocol_version",
         "client_name",
         "client_version",

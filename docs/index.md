@@ -29,7 +29,10 @@ Four Singapore legal databases are available:
 https://mcp.zeeker.sg/mcp
 ```
 
-Transport: streamable HTTP (MCP spec 2025-06-18). No authentication required for the anonymous tier.
+Transport: streamable HTTP (MCP spec 2025-06-18). Stateless by default — no
+`initialize` handshake or `Mcp-Session-Id` required (July 2026 spec revision
+adopted in substance; legacy clients fully supported). No authentication
+required for the anonymous tier.
 
 ## Documentation
 

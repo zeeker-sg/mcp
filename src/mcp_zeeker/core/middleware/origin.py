@@ -42,6 +42,10 @@ class OriginAllowlistMiddleware:
                         "access-control-allow-origin": origin,
                         "access-control-allow-methods": "POST, GET, DELETE, OPTIONS",
                         "access-control-allow-headers": (
+                            # mcp-session-id and mcp-protocol-version are kept
+                            # for legacy clients that still use the initialize
+                            # handshake. Remove after the July 2026 spec
+                            # revision is universally adopted (target: 2027-01).
                             "content-type, mcp-session-id, mcp-protocol-version"
                         ),
                         "access-control-max-age": "600",
