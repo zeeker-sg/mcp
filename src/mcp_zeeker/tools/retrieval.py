@@ -69,6 +69,7 @@ from mcp_zeeker.core.filter_compiler import Filter, compile_filters
 from mcp_zeeker.core.metadata_cache import MetadataCache
 from mcp_zeeker.core.middleware.retrieved_at import get_tool_started_at
 from mcp_zeeker.core.visibility import (
+    _get_database_summary,
     _resolve_table,
     _visible_columns,
     raise_not_found,
@@ -359,31 +360,45 @@ async def query_table(
 
     # Step 8: build sort param (D3-08, Datasette _sort / _sort_desc mapping)
     #
-    # D6.1-03 / Finding #4: when the caller does NOT specify a sort, force
-    # `_sort=rowid` on the upstream request. Several upstream tables (every
-    # `sg-gov-newsrooms.*_news` table, as of 2026-05-15) have a per-table
-    # default sort configured in Datasette metadata (e.g. `mlaw_news` →
+    # D6.1-03 / Finding #4: when the caller does NOT specify a sort, force a
+    # deterministic sort on the upstream request. Several upstream tables (every
+    # `sg-gov-newsrooms.*_news` table, as of 2026-05-15) have a per-table default
+    # sort configured in Datasette metadata (e.g. `mlaw_news` →
     # `published_date desc`). When `_col=` is sent WITHOUT the implicit
     # sort column, Datasette generates invalid SQL (`SELECT rowid,
     # content_text FROM mlaw_news ORDER BY published_date desc` — but the
     # parser can't compile it cleanly and returns HTTP 400 "Invalid SQL:
-    # incomplete input"). This manifested as Finding #4 — `query_table(...,
-    # columns=["content_text"])` returning `upstream_unavailable` even
-    # though the same upstream URL succeeded via curl when the default-sort
-    # column was included.
+    # incomplete input").
     #
-    # `_sort=rowid` is a uniform override that works on every table (rowid
-    # is an implicit SQLite column on every non-VIEW table). For tables
-    # without a configured default sort the SQL becomes `... ORDER BY rowid`
-    # which is identical to Datasette's vanilla default order — no
-    # behavioral change. For tables with a configured default sort, the
-    # override sidesteps the invalid-SQL trap.
+    # The original fix used `_sort=rowid` as a uniform override. But several
+    # tables are SQLite VIEWS (all `*_fragments` tables, `sglawwatch.headlines`,
+    # etc.) — views don't have a `rowid`, and Datasette returns HTTP 500
+    # "Cannot sort table by rowid". The fix: use the table's primary key if it
+    # has one (works on both physical tables and views). If the table has no
+    # primary key, fall back to `rowid` (physical tables only). If neither is
+    # available, omit the sort override and let Datasette use its default
+    # ordering — the invalid-SQL trap only fires when `_col=` excludes the
+    # default-sort column, and tables without a PK are edge cases where
+    # accepting Datasette's default is safer than guessing.
     if sort and sort.startswith("-"):
         sort_params: list[tuple[str, str]] = [("_sort_desc", sort.lstrip("-"))]
     elif sort:
         sort_params = [("_sort", sort)]
     else:
-        sort_params = [("_sort", "rowid")]
+        # Look up the table's primary key from the DatabaseSummary cache.
+        # The summary was already fetched by _visible_columns above (shared
+        # via DatabaseSummaryCache), so this is a cache hit — no extra upstream
+        # call. If the cache is unavailable (unit-test direct-call path),
+        # fall back to `rowid` which preserves the original behavior.
+        default_sort_col = "rowid"
+        try:
+            summary = await _get_database_summary(database)
+            table_summary = next((t for t in summary.tables if t.name == table), None)
+            if table_summary is not None and table_summary.primary_keys:
+                default_sort_col = table_summary.primary_keys[0]
+        except Exception:
+            pass  # fall back to rowid
+        sort_params = [("_sort", default_sort_col)]
 
     # Step 9: canonical shape + cursor decode (D3-03). Computed AFTER the
     # visibility checks (so unknown_column on an arbitrary cursored request
