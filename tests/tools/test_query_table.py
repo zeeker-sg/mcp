@@ -875,3 +875,122 @@ async def test_thirteen_ops_end_to_end(
     assert values == [param_value], (
         f"op={op_name}: expected ?{param_key}={param_value}, got {values}"
     )
+
+
+# ---------------------------------------------------------------------------
+# View sort fix — tables without rowid (SQLite views) must not get _sort=rowid
+# ---------------------------------------------------------------------------
+
+
+def _fragments_db_payload() -> dict:
+    """zeeker-judgements.json with judgments_fragments as a view (has PK, no rowid)."""
+    return {
+        "tables": [
+            {
+                "name": "judgments",
+                "hidden": False,
+                "count": 100,
+                "columns": ["id", "citation", "case_name", "source_url", "summary"],
+                "primary_keys": ["id"],
+            },
+            {
+                "name": "judgments_fragments",
+                "hidden": False,
+                "count": None,
+                "columns": [
+                    "id",
+                    "judgment_id",
+                    "ordinal",
+                    "content_text",
+                    "html_raw",
+                ],
+                "primary_keys": ["id"],
+            },
+        ]
+    }
+
+
+def _fragments_rows_payload() -> dict:
+    return {
+        "rows": [
+            {
+                "id": "abc_0000",
+                "judgment_id": "abc",
+                "ordinal": 0,
+            },
+        ],
+        "columns": ["id", "judgment_id", "ordinal"],
+        "next": None,
+        "truncated": False,
+        "filtered_table_rows_count": 1,
+    }
+
+
+async def test_view_table_uses_pk_not_rowid_for_default_sort(
+    datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock
+) -> None:
+    """Fix: tables that are SQLite views don't have rowid. The default sort
+    must use the table's primary key instead of rowid, or Datasette returns
+    HTTP 500 'Cannot sort table by rowid'.
+    """
+    httpx_mock.add_response(
+        url=_db_url("zeeker-judgements"), json=_fragments_db_payload(), is_reusable=True
+    )
+    httpx_mock.add_response(
+        url=_zeeker_schemas_url("zeeker-judgements"), json=_empty_schema_payload()
+    )
+    httpx_mock.add_response(
+        url=_table_url_re("zeeker-judgements", "judgments_fragments"),
+        json=_fragments_rows_payload(),
+    )
+
+    from mcp_zeeker.core.envelope import Envelope
+
+    envelope = await query_table("zeeker-judgements", "judgments_fragments", limit=3)
+    assert isinstance(envelope, Envelope)
+
+    table_reqs = _table_requests(httpx_mock, "zeeker-judgements", "judgments_fragments")
+    assert len(table_reqs) == 1
+    sort_param = table_reqs[0].url.params.get_list("_sort")
+    # Must use the PK ("id"), NOT "rowid" — views don't have rowid
+    assert sort_param == ["id"], (
+        f"Expected _sort=id (table PK) for view, got _sort={sort_param}. "
+        f"Views don't have rowid — Datasette returns 500."
+    )
+
+
+async def test_physical_table_still_uses_rowid_when_no_pk(
+    datasette_client, metadata_cache, httpx_mock: pytest_httpx.HTTPXMock
+) -> None:
+    """Tables without a primary key still fall back to _sort=rowid (physical tables only)."""
+    db_payload = {
+        "tables": [
+            {
+                "name": "judgments",
+                "hidden": False,
+                "count": 100,
+                "columns": ["id", "citation", "case_name", "source_url", "summary"],
+                "primary_keys": [],  # no PK → fall back to rowid
+            },
+        ]
+    }
+    httpx_mock.add_response(url=_db_url("zeeker-judgements"), json=db_payload, is_reusable=True)
+    httpx_mock.add_response(
+        url=_zeeker_schemas_url("zeeker-judgements"), json=_empty_schema_payload()
+    )
+    httpx_mock.add_response(
+        url=_table_url_re("zeeker-judgements", "judgments"),
+        json=_judgments_rows_payload(),
+    )
+
+    envelope = await query_table("zeeker-judgements", "judgments", limit=1)
+    from mcp_zeeker.core.envelope import Envelope
+
+    assert isinstance(envelope, Envelope)
+
+    table_reqs = _table_requests(httpx_mock, "zeeker-judgements", "judgments")
+    assert len(table_reqs) == 1
+    sort_param = table_reqs[0].url.params.get_list("_sort")
+    assert sort_param == ["rowid"], (
+        f"Expected _sort=rowid for physical table without PK, got _sort={sort_param}"
+    )
