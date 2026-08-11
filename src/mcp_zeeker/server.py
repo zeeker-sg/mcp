@@ -21,7 +21,9 @@ mcp.add_middleware(RetrievedAtMiddleware())
 # RetrievedAt so retrieved_at stays bound during error handling.
 mcp.add_middleware(ErrorEnrichmentMiddleware())
 mcp.add_middleware(StructuredLogMiddleware())
-# Emits the `session_start` handshake event on every MCP initialize (#5).
+# Emits `session_start` on MCP `initialize` (legacy clients, #5) and
+# `first_request` on the first non-initialize request (new-spec clients
+# that skip the handshake per the July 2026 spec revision).
 # request_id/ip_prefix are bound at the ASGI layer, so ordering among these
 # does not affect their availability in the log line.
 mcp.add_middleware(SessionLogMiddleware())

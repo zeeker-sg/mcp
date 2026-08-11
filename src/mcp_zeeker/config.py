@@ -523,6 +523,21 @@ SESSION_START_FIELDS: tuple[str, ...] = (
     "client_version",
 )
 
+# Locked field set for the `first_request` event emitted by SessionLogMiddleware
+# on the first MCP request from new-spec clients (July 2026 spec revision) that
+# skip the `initialize` handshake. Same pseudonymous identity as SESSION_START_FIELDS
+# plus `method` (the JSON-RPC method name, e.g. "tools/call") to distinguish the
+# type of first interaction. protocol_version / client_name / client_version may
+# be None for new-spec clients that don't include them in per-call requests.
+FIRST_REQUEST_FIELDS: tuple[str, ...] = (
+    "request_id",
+    "ip_prefix",
+    "method",
+    "protocol_version",
+    "client_name",
+    "client_version",
+)
+
 # Locked field set for the `search_timing` event emitted by the search handler
 # (#6a / #8). Kept distinct from LOG_FIELDS so the tool_call schema test stays
 # independent and each event is auditable on its own — same pattern as

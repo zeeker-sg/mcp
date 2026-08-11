@@ -24,10 +24,13 @@ for in-development testing. Production uses `https://mcp.zeeker.sg/mcp`.
 
 ## Stable server identifier
 
-The server reports `serverInfo.name = "zeeker"` during the MCP `initialize` handshake.
-This name is stable across releases and reconnections. Downstream code should hard-code
-the `mcp__zeeker__` prefix; if a host exposes tools under a different prefix (e.g. a UUID),
-that is a host-side routing issue, not a zeeker-side change.
+The server advertises `serverInfo.name = "zeeker"` to MCP clients. Under the
+original MCP spec this was returned during the `initialize` handshake; under
+the July 2026 stateless spec revision the handshake is removed, but the server
+name is still advertised in server metadata on every response. The name is
+stable across releases and reconnections. Downstream code should hard-code
+the `mcp__zeeker__` prefix; if a host exposes tools under a different prefix
+(e.g. a UUID), that is a host-side routing issue, not a zeeker-side change.
 
 **Published tools:**
 

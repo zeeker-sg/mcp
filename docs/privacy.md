@@ -56,6 +56,12 @@ This line records **software** client identity only — the name and version of 
 program. It is **not** a user identity, account, or session token, and contains no full IP
 address and no tool arguments. It is emitted exactly once per `initialize` handshake.
 
+Under the July 2026 MCP spec revision, the `initialize` handshake is removed for new-spec
+clients. The server additionally emits a `first_request` event on the first non-`initialize`
+MCP request from such clients, carrying the same pseudonymous identity fields plus the
+JSON-RPC method name. For new-spec clients, `protocol_version`, `client_name`, and
+`client_version` may be `None` if not included in the request.
+
 ---
 
 ## 2. Log Retention

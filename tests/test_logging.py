@@ -73,6 +73,29 @@ def test_session_start_fields_locked_to_config():
     assert extra_keys == set(), f"Unexpected keys in log line: {extra_keys!r}. Full line: {line!r}"
 
 
+def test_first_request_fields_locked_to_config():
+    """Stateless-spec: first_request log line carries no keys beyond FIRST_REQUEST_FIELDS + meta."""
+    bind_request("first-req-locked-test", "10.0.0")
+    try:
+        with capture_logs(processors=[structlog.contextvars.merge_contextvars]) as cap:
+            structlog.get_logger().info(
+                "first_request",
+                method="tools/call",
+                protocol_version=None,
+                client_name=None,
+                client_version=None,
+            )
+    finally:
+        clear_request()
+
+    assert cap, "No log lines captured"
+    line = cap[0]
+
+    allowed_keys = set(config.FIRST_REQUEST_FIELDS) | {"event", "log_level", "level", "timestamp"}
+    extra_keys = set(line.keys()) - allowed_keys
+    assert extra_keys == set(), f"Unexpected keys in log line: {extra_keys!r}. Full line: {line!r}"
+
+
 async def test_session_start_middleware_emits_clientinfo():
     """#5: SessionLogMiddleware.on_initialize emits a session_start line with
     the software client identity from initialize params, and tolerates a
@@ -110,6 +133,70 @@ async def test_session_start_middleware_emits_clientinfo():
     assert line2["protocol_version"] == "2025-06-18"
     assert line2["client_name"] is None
     assert line2["client_version"] is None
+
+
+async def test_first_request_middleware_emits_on_non_initialize():
+    """Stateless-spec: on_request emits first_request for non-initialize methods,
+    and skips emit for initialize (on_initialize handles that)."""
+
+    async def call_next(_context):
+        return None
+
+    # Non-initialize request (e.g. tools/call) — should emit first_request.
+    params = types.SimpleNamespace(
+        protocolVersion=None,
+        clientInfo=types.SimpleNamespace(name="claude-code", version="1.5"),
+    )
+    context = types.SimpleNamespace(
+        message=types.SimpleNamespace(method="tools/call", params=params)
+    )
+
+    with capture_logs() as cap:
+        await SessionLogMiddleware().on_request(context, call_next)
+
+    assert cap, "No first_request log line captured"
+    line = cap[0]
+    assert line["event"] == "first_request"
+    assert line["method"] == "tools/call"
+    assert line["client_name"] == "claude-code"
+    assert line["client_version"] == "1.5"
+
+    # Initialize request — on_request should NOT emit (on_initialize handles it).
+    init_params = types.SimpleNamespace(
+        protocolVersion="2025-06-18",
+        clientInfo=types.SimpleNamespace(name="claude-ai", version="1.0"),
+    )
+    init_context = types.SimpleNamespace(
+        message=types.SimpleNamespace(method="initialize", params=init_params)
+    )
+
+    with capture_logs() as cap2:
+        await SessionLogMiddleware().on_request(init_context, call_next)
+
+    assert cap2 == [], f"on_request should not emit for initialize; got {cap2!r}"
+
+
+async def test_first_request_middleware_tolerates_missing_clientinfo():
+    """Stateless-spec: on_request tolerates missing clientInfo (new-spec clients
+    may not include it on per-call requests)."""
+
+    async def call_next(_context):
+        return None
+
+    params = types.SimpleNamespace(protocolVersion=None, clientInfo=None)
+    context = types.SimpleNamespace(
+        message=types.SimpleNamespace(method="tools/list", params=params)
+    )
+
+    with capture_logs() as cap:
+        await SessionLogMiddleware().on_request(context, call_next)
+
+    assert cap, "No first_request log line captured"
+    line = cap[0]
+    assert line["event"] == "first_request"
+    assert line["method"] == "tools/list"
+    assert line["client_name"] is None
+    assert line["client_version"] is None
 
 
 async def test_request_id_propagates_across_async_tasks():
