@@ -76,12 +76,13 @@ def test_constants_present():
 
 
 def test_allowed_databases_exact():
-    """CFG-01: ALLOWED_DATABASES is the exact four names in exact order."""
+    """CFG-01: ALLOWED_DATABASES is the exact five names in exact order."""
     assert config.ALLOWED_DATABASES == (
         "zeeker-judgements",
         "pdpc",
         "sg-gov-newsrooms",
         "sglawwatch",
+        "sg-law-cookies",
     )
 
 

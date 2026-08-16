@@ -133,6 +133,24 @@ _STUB_ROW_PER_TABLE: dict[tuple[str, str], dict] = {
         "section": "Civil Procedure",
         "item_url": "https://slw.example.test/a/1",
     },
+    ("sg-law-cookies", "cookies"): {
+        "headline": "Court clarifies contempt defence",
+        "date": "2026-05-26",
+        "source_url": "https://www.elitigation.sg/gd/s/2026_SGPHC_2",
+    },
+    ("sg-law-cookies", "judgment_issues"): {
+        "citation": "[2026] SGPHC 2",
+        "question": "Whether the Respondent breached the VCO",
+        "date": "2026-05-26",
+        "source_url": "https://www.elitigation.sg/gd/s/2026_SGPHC_2",
+    },
+    ("sg-law-cookies", "judgments"): {
+        "case_name": "Foo v Bar",
+        "citation": "[2026] SGPHC 2",
+        "court": "Protection from Harassment Court",
+        "date": "2026-05-26",
+        "source_url": "https://www.elitigation.sg/gd/s/2026_SGPHC_2",
+    },
 }
 
 

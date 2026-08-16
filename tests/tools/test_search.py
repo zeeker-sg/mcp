@@ -150,8 +150,35 @@ def _sglawwatch_db_payload() -> dict:
     }
 
 
+def _sg_law_cookies_db_payload() -> dict:
+    """sg-law-cookies — one table with FTS for simplicity (cookies)."""
+    return {
+        "tables": [
+            {
+                "name": "cookies",
+                "hidden": False,
+                "count": 45,
+                "columns": [
+                    "id",
+                    "headline",
+                    "summary",
+                    "why_it_matters",
+                    "significance",
+                    "date",
+                    "item_type",
+                    "primary_area",
+                    "source_url",
+                    "source_title",
+                ],
+                "primary_keys": [],
+                "fts_table": "cookies_fts",
+            },
+        ]
+    }
+
+
 def _stub_four_dbs(httpx_mock: pytest_httpx.HTTPXMock) -> None:
-    """Stub the four ALLOWED_DATABASES /{db}.json responses."""
+    """Stub the ALLOWED_DATABASES /{db}.json responses."""
     httpx_mock.add_response(
         url=_db_url("zeeker-judgements"), json=_judgments_db_payload(), is_reusable=True
     )
@@ -161,6 +188,9 @@ def _stub_four_dbs(httpx_mock: pytest_httpx.HTTPXMock) -> None:
     )
     httpx_mock.add_response(
         url=_db_url("sglawwatch"), json=_sglawwatch_db_payload(), is_reusable=True
+    )
+    httpx_mock.add_response(
+        url=_db_url("sg-law-cookies"), json=_sg_law_cookies_db_payload(), is_reusable=True
     )
 
 
@@ -283,6 +313,24 @@ def _stub_per_table_responses(httpx_mock: pytest_httpx.HTTPXMock) -> None:
         json=_commentaries_search_rows(),
         is_reusable=True,
     )
+    httpx_mock.add_response(
+        url=_table_url_re("sg-law-cookies", "cookies"),
+        json={
+            "rows": [
+                {
+                    "headline": "Test cookie",
+                    "summary": "A test cookie from search fixture.",
+                    "date": "2026-01-01",
+                    "source_url": "https://www.elitigation.sg/gd/s/2026_SGPHC_1",
+                },
+            ],
+            "columns": ["headline", "summary", "date", "source_url"],
+            "next": None,
+            "truncated": False,
+            "filtered_table_rows_count": 1,
+        },
+        is_reusable=True,
+    )
 
 
 async def test_default_databases_searches_all_four(
@@ -398,6 +446,24 @@ async def test_upstream_total_hits_populated(
     httpx_mock.add_response(
         url=_table_url_re("sglawwatch", "commentaries"),
         json=_commentaries_search_rows(filtered_count=5),
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        url=_table_url_re("sg-law-cookies", "cookies"),
+        json={
+            "rows": [
+                {
+                    "headline": "Test cookie",
+                    "summary": "A test cookie from search fixture.",
+                    "date": "2026-01-01",
+                    "source_url": "https://www.elitigation.sg/gd/s/2026_SGPHC_1",
+                },
+            ],
+            "columns": ["headline", "summary", "date", "source_url"],
+            "next": None,
+            "truncated": False,
+            "filtered_table_rows_count": 3,
+        },
         is_reusable=True,
     )
 

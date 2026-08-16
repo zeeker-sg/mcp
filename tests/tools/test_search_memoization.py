@@ -141,6 +141,22 @@ def _stub_all_dbs(httpx_mock: pytest_httpx.HTTPXMock) -> None:
     httpx_mock.add_response(
         url=_db_url("sglawwatch"), json=_sglawwatch_db_payload(), is_reusable=True
     )
+    httpx_mock.add_response(
+        url=_db_url("sg-law-cookies"),
+        json={
+            "tables": [
+                {
+                    "name": "cookies",
+                    "hidden": False,
+                    "count": 45,
+                    "columns": ["id", "headline", "summary", "date", "source_url"],
+                    "primary_keys": [],
+                    "fts_table": "cookies_fts",
+                },
+            ]
+        },
+        is_reusable=True,
+    )
 
 
 def _stub_table_responses(httpx_mock: pytest_httpx.HTTPXMock) -> None:
@@ -152,6 +168,13 @@ def _stub_table_responses(httpx_mock: pytest_httpx.HTTPXMock) -> None:
         "truncated": False,
         "columns": ["title", "source_url"],
     }
+    cookies_happy = {
+        "rows": [{"headline": "r", "source_url": "https://r"}],
+        "filtered_table_rows_count": 1,
+        "next": None,
+        "truncated": False,
+        "columns": ["headline", "source_url"],
+    }
     for db, table in [
         ("zeeker-judgements", "judgments"),
         ("sg-gov-newsrooms", "acra_news"),
@@ -160,6 +183,9 @@ def _stub_table_responses(httpx_mock: pytest_httpx.HTTPXMock) -> None:
         ("sglawwatch", "commentaries"),
     ]:
         httpx_mock.add_response(url=_table_url_re(db, table), json=happy, is_reusable=True)
+    httpx_mock.add_response(
+        url=_table_url_re("sg-law-cookies", "cookies"), json=cookies_happy, is_reusable=True
+    )
 
 
 def _count_db_fetches(httpx_mock: pytest_httpx.HTTPXMock, db: str) -> int:

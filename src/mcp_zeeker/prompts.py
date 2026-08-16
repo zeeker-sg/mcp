@@ -50,3 +50,39 @@ def search_judgements(query: str) -> list[dict]:
             ),
         }
     ]
+
+
+@mcp.prompt(
+    name="search_cookies",
+    description="Route Singapore law cookie searches to the sg-law-cookies database",
+)
+def search_cookies(query: str) -> list[dict]:
+    """Return a prompt that helps the client search sg-law-cookies effectively.
+
+    Cookies are concise curated summaries of Singapore legal developments.
+    Judgment issues extract legal questions and holdings from judgments.
+    """
+    return [
+        {
+            "role": "user",
+            "content": (
+                f"Find Singapore legal cookies matching: {query}\n\n"
+                "Use the `sg-law-cookies` database. Cookies (concise legal "
+                "summaries) are in the `cookies` table. Issues extracted from "
+                "judgments (legal questions and holdings) are in "
+                "`judgment_issues`. Judgment metadata is in `judgments`.\n\n"
+                "Strategy:\n"
+                "1. Call `search()` with `databases=['sg-law-cookies']` for "
+                "topical queries — this searches cookies headlines/summaries "
+                "and judgment issues questions/holdings/reasoning.\n"
+                "2. Call `query_table()` on `sg-law-cookies.cookies` to filter "
+                "by date, significance, or primary_area.\n"
+                "3. Call `query_table()` on `sg-law-cookies.judgment_issues` "
+                "to drill into specific legal questions from a judgment, "
+                "filtering by citation or court.\n"
+                "4. Call `fetch()` on `sg-law-cookies.cookies` or "
+                "`sg-law-cookies.judgments` with a `source_url` to retrieve "
+                "the full row.\n"
+            ),
+        }
+    ]
