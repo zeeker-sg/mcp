@@ -85,7 +85,7 @@ async def test_list_databases(
 
     envelope = await list_databases()
 
-    assert len(envelope.data) == 4
+    assert len(envelope.data) == len(config.ALLOWED_DATABASES)
     names_in_response = {row["name"] for row in envelope.data}
     assert names_in_response == set(config.ALLOWED_DATABASES)
 

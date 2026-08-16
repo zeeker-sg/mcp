@@ -113,8 +113,8 @@ async def test_fts_gate_drops_non_fts_table(
         ),
         is_reusable=True,
     )
-    # When databases=None (default), handler iterates all four — stub the others.
-    for db in ("pdpc", "sg-gov-newsrooms", "sglawwatch"):
+    # When databases=None (default), handler iterates all — stub the others.
+    for db in ("pdpc", "sg-gov-newsrooms", "sglawwatch", "sg-law-cookies"):
         httpx_mock.add_response(url=_db_url(db), json=_empty_db_payload(), is_reusable=True)
 
     # Only t_fts is expected to be dispatched. Register exactly one per-table
@@ -290,6 +290,16 @@ async def test_pdpc_no_dispatch(datasette_client, httpx_mock: pytest_httpx.HTTPX
         ),
         is_reusable=True,
     )
+    # sg-law-cookies — stub with a FTS table so the all-DBs path has dispatch work.
+    httpx_mock.add_response(
+        url=_db_url("sg-law-cookies"),
+        json=_tables_payload(
+            ["cookies"],
+            fts_tables={"cookies": "cookies_fts"},
+            columns={"cookies": ["headline", "source_url"]},
+        ),
+        is_reusable=True,
+    )
 
     # Per-table FTS stubs for the three FTS-having DBs so the all-DBs call
     # doesn't hit unmatched-response errors.
@@ -308,6 +318,17 @@ async def test_pdpc_no_dispatch(datasette_client, httpx_mock: pytest_httpx.HTTPX
     )
     httpx_mock.add_response(
         url=_table_url_re("sglawwatch", "commentaries"), json=happy_row, is_reusable=True
+    )
+    # sg-law-cookies cookies — preview override maps title→headline.
+    cookies_row = {
+        "rows": [{"headline": "r", "source_url": "https://r"}],
+        "filtered_table_rows_count": 1,
+        "next": None,
+        "truncated": False,
+        "columns": ["headline", "source_url"],
+    }
+    httpx_mock.add_response(
+        url=_table_url_re("sg-law-cookies", "cookies"), json=cookies_row, is_reusable=True
     )
 
     # Path (a): explicit databases=["pdpc"] → empty envelope, zero pdpc dispatches.

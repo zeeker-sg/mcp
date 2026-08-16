@@ -57,6 +57,8 @@ _HEAVY_COL_PER_TABLE: dict[tuple[str, str], str] = {
     ("sglawwatch", "headlines"): "text",
     ("sglawwatch", "commentaries"): "full_text",
     ("sglawwatch", "about_singapore_law_fragments"): "content_text",
+    ("sg-law-cookies", "cookies"): "why_it_matters",
+    ("sg-law-cookies", "judgment_issues"): "holding",
 }
 
 

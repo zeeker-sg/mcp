@@ -18,6 +18,7 @@ ALLOWED_DATABASES: tuple[str, ...] = (
     "pdpc",
     "sg-gov-newsrooms",
     "sglawwatch",
+    "sg-law-cookies",
 )
 
 DATABASE_DESCRIPTIONS: dict[str, str] = {
@@ -31,6 +32,10 @@ DATABASE_DESCRIPTIONS: dict[str, str] = {
     "sglawwatch": (
         "Curated Singapore legal commentaries, headlines, and about-Singapore-law articles."
     ),
+    "sg-law-cookies": (
+        "Singapore law cookies — curated case summaries, judgment issues, "
+        "and metadata extracted from Singapore court judgments."
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -43,6 +48,7 @@ HIDDEN_TABLES: dict[str, set[str]] = {
     "pdpc": {"_zeeker_schemas", "_zeeker_updates"},
     "sg-gov-newsrooms": {"_zeeker_schemas", "_zeeker_updates"},
     "sglawwatch": {"_zeeker_schemas", "_zeeker_updates", "metadata", "schema_versions"},
+    "sg-law-cookies": {"_zeeker_schemas", "_zeeker_updates"},
 }
 
 # D2-10: flat dict keyed on "*" (global) or "<db>.<table>" (per-table);
@@ -52,6 +58,7 @@ HIDDEN_COLUMNS: dict[str, set[str]] = {
     "zeeker-judgements.judgments_fragments": {"id", "judgment_id"},
     "sglawwatch.about_singapore_law_fragments": {"id", "item_id"},
     "pdpc.enforcement_decisions_fragments": {"id", "parent_id"},
+    "sg-law-cookies.judgment_issues": {"id", "judgment_id"},
 }
 
 # Phase 3 (FETCH-01) is the consumer; describe_table reads keys for url_keyed bool
@@ -69,6 +76,9 @@ URL_COLUMNS: dict[str, str] = {
     "sglawwatch.headlines": "source_link",
     "sglawwatch.commentaries": "link",
     "sglawwatch.about_singapore_law": "item_url",
+    "sg-law-cookies.cookies": "source_url",
+    "sg-law-cookies.judgment_issues": "source_url",
+    "sg-law-cookies.judgments": "source_url",
 }
 
 # Phase 5 is consumer; describe_table reads keys for supports_fragments bool.
@@ -162,6 +172,37 @@ LIGHT_COLUMNS: dict[str, list[str]] = {
     ],
     "sglawwatch.about_singapore_law": ["item_url", "title", "section", "home_page"],
     "sglawwatch.about_singapore_law_fragments": ["fragment_order", "char_count"],
+    # sg-law-cookies tables
+    "sg-law-cookies.cookies": [
+        "headline",
+        "summary",
+        "significance",
+        "date",
+        "item_type",
+        "primary_area",
+        "source_url",
+        "source_title",
+    ],
+    "sg-law-cookies.judgment_issues": [
+        "citation",
+        "court",
+        "issue_index",
+        "question",
+        "date",
+        "source_url",
+    ],
+    "sg-law-cookies.judgments": [
+        "citation",
+        "case_name",
+        "court",
+        "date",
+        "source_url",
+    ],
+    "sg-law-cookies.unresolved_terms": [
+        "term",
+        "first_seen_date",
+        "count",
+    ],
 }
 
 # ---------------------------------------------------------------------------
@@ -187,6 +228,24 @@ TABLE_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "Paragraph-level fragments of about-Singapore-law articles."
         ),
     },
+    "sg-law-cookies": {
+        "cookies": (
+            "Curated Singapore law cookies — concise summaries of legal "
+            "developments with significance ratings and Folio taxonomy tags."
+        ),
+        "judgment_issues": (
+            "Issues extracted from Singapore court judgments — each issue "
+            "has a question, holding, and reasoning."
+        ),
+        "judgments": (
+            "Singapore court judgment metadata — citation, case name, court, "
+            "judges, parties, legislation, and cases cited."
+        ),
+        "unresolved_terms": (
+            "Terms not yet resolved in the Folio legal taxonomy, with first-seen "
+            "date and occurrence count."
+        ),
+    },
 }
 
 # Fallback column descriptions (minimal-viable for Phase 2)
@@ -201,7 +260,43 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, dict[str, str]]] = {
             "penalty_amount": "Financial penalty amount in SGD (null if no financial penalty)",
             "summary": "Brief summary of the enforcement action",
         }
-    }
+    },
+    "sg-law-cookies": {
+        "cookies": {
+            "headline": "Short headline summarizing the legal development",
+            "summary": "Concise summary of the case or legal point",
+            "why_it_matters": "Explanation of why this development is significant",
+            "significance": "Significance rating (e.g. high, medium, low)",
+            "date": "Date of the judgment or development (YYYY-MM-DD)",
+            "item_type": "Type of item (e.g. judgment)",
+            "primary_area": "Primary area of law (e.g. Criminal Law)",
+            "source_url": "URL to the full source document",
+            "source_title": "Title of the source document",
+        },
+        "judgment_issues": {
+            "citation": "Neutral citation of the judgment (e.g. [2026] SGHC 119)",
+            "court": "Court that issued the judgment",
+            "issue_index": "Sequential index of the issue within the judgment",
+            "question": "The legal question posed by this issue",
+            "holding": "The court's holding on this issue",
+            "reasoning": "The court's reasoning for the holding",
+            "date": "Date of the judgment (YYYY-MM-DD)",
+            "source_url": "URL to the full judgment",
+        },
+        "judgments": {
+            "citation": "Neutral citation (e.g. [2026] SGHC 119)",
+            "case_name": "Case name",
+            "court": "Court that issued the judgment",
+            "judges": "JSON array of judge names",
+            "parties": "JSON array of party descriptions",
+            "legislation": "JSON array of legislation references",
+            "cases_cited": "JSON array of cited cases with citations",
+            "orders": "Court orders text",
+            "issue_count": "Number of issues extracted from this judgment",
+            "date": "Date of the judgment (YYYY-MM-DD)",
+            "source_url": "URL to the full judgment on eLitigation",
+        },
+    },
 }
 
 # Fallback column types for tables missing from _zeeker_schemas (Pitfall 5)
@@ -262,6 +357,7 @@ LICENSES: dict[str, tuple[str, str]] = {
     "pdpc": ("CC-BY-4.0", LICENSE_DEFAULT_URL),
     "sg-gov-newsrooms": ("CC-BY-4.0", LICENSE_DEFAULT_URL),
     "sglawwatch": ("CC-BY-4.0", LICENSE_DEFAULT_URL),
+    "sg-law-cookies": ("CC-BY-4.0", LICENSE_DEFAULT_URL),
 }
 
 # ---------------------------------------------------------------------------
@@ -383,6 +479,18 @@ CONTENT_POLICIES: dict[tuple[str, str], dict] = {
         "license_url": _SAL_ABOUT_SG_LAW_URL,
         "redistribution": "process-only",
     },
+    ("sg-law-cookies", "cookies"): {
+        "source": "Zeeker — curated Singapore legal cookies",
+        "license": "CC-BY-4.0",
+        "license_url": LICENSE_DEFAULT_URL,
+        "redistribution": "allowed",
+    },
+    ("sg-law-cookies", "judgment_issues"): {
+        "source": "Singapore courts — extracted judgment issues via Zeeker",
+        "license": "Crown Copyright Singapore",
+        "license_url": _ELIT_URL,
+        "redistribution": "process-only",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -425,6 +533,9 @@ CITATION_TEMPLATES: dict[tuple[str, str], str] = {
     ("sglawwatch", "headlines"): "{title} — {author} ({date}) — {source_link}",
     ("sglawwatch", "commentaries"): "{title} — {author} ({pub_date}) — {link}",
     ("sglawwatch", "about_singapore_law"): "{title} ({section}) — {item_url}",
+    ("sg-law-cookies", "cookies"): "{headline} ({date}) — {source_url}",
+    ("sg-law-cookies", "judgment_issues"): "{citation} — {question} ({date}) — {source_url}",
+    ("sg-law-cookies", "judgments"): "{case_name} {citation} ({court}, {date}) — {source_url}",
 }
 
 # ---------------------------------------------------------------------------
@@ -583,6 +694,10 @@ HEAVY_COLUMNS: frozenset[str] = frozenset(
         "figure_descriptions",
         "text",
         "_policy",
+        # sg-law-cookies long-text fields
+        "why_it_matters",
+        "holding",
+        "reasoning",
     }
 )
 
@@ -614,7 +729,35 @@ SEARCH_PREVIEW_DEFAULTS: dict[str, tuple[str, ...]] = {
 # tables resolve cleanly via defaults. Format: {f"{db}.{table}": {field:
 # column_name | None}} — mirrors URL_COLUMNS flat-key style. `None` value
 # means "explicitly suppress this field" (emit the preview row's field as null).
-SEARCH_PREVIEW_OVERRIDES: dict[str, dict[str, str | None]] = {}
+SEARCH_PREVIEW_OVERRIDES: dict[str, dict[str, str | None]] = {
+    # sg-law-cookies — cookies has "headline" (not "title"/"case_name"/"name"/
+    # "heading" in SEARCH_PREVIEW_DEFAULTS); map it explicitly so the table
+    # passes Gate 4 of searchable_tables_for.
+    "sg-law-cookies.cookies": {
+        "title": "headline",
+    },
+    # sg-law-cookies — judgment_issues has no "title" candidate in
+    # SEARCH_PREVIEW_DEFAULTS (question is the descriptive field); map it
+    # explicitly so the table passes Gate 4 of searchable_tables_for.
+    "sg-law-cookies.judgment_issues": {
+        "title": "question",
+        "summary": "holding",
+    },
+    # sg-law-cookies — judgments has no "summary" candidate in defaults;
+    # use "citation" as a summary-like fallback (neutral citation is
+    # informative in a search preview row).
+    "sg-law-cookies.judgments": {
+        "summary": "citation",
+    },
+    # sg-law-cookies — unresolved_terms has no title/date/summary/url
+    # candidates at all. Setting title=None drops it from search discovery
+    # at Gate 4 (resolve_preview_columns returns None when title is None),
+    # which is desired — it's a taxonomy reference table, not a search target.
+    # query_table and describe_table still work on it directly.
+    "sg-law-cookies.unresolved_terms": {
+        "title": None,
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Issue #12 Phase 1 — BM25 search ranking (SEARCH_RANKING / SEARCH_BM25_WEIGHTS)
@@ -685,6 +828,27 @@ SEARCH_BM25_WEIGHTS: dict[str, dict[str, float]] = {
     },
     # fts columns: [title]
     "sglawwatch.about_singapore_law": {"title": 10.0},
+    # sg-law-cookies — fts columns: [headline, summary, why_it_matters]
+    "sg-law-cookies.cookies": {
+        "headline": 10.0,
+        "summary": 5.0,
+        "why_it_matters": 3.0,
+    },
+    # fts columns: [question, holding, reasoning]
+    "sg-law-cookies.judgment_issues": {
+        "question": 10.0,
+        "holding": 5.0,
+        "reasoning": 3.0,
+    },
+    # fts columns: [case_name, orders]
+    "sg-law-cookies.judgments": {
+        "case_name": 10.0,
+        "orders": 2.0,
+    },
+    # fts columns: [term]
+    "sg-law-cookies.unresolved_terms": {
+        "term": 10.0,
+    },
 }
 
 # ---------------------------------------------------------------------------

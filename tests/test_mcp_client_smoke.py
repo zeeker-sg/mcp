@@ -69,10 +69,10 @@ async def test_tool_annotations(mcp_client):
 
 @pytest.mark.httpx_mock(assert_all_responses_were_requested=True)
 async def test_list_databases_returns_four_dbs(stub_upstream, bound_datasette_client):
-    """DISC-01: tools/call list_databases returns an envelope with exactly 4 databases.
+    """DISC-01: tools/call list_databases returns an envelope with exactly 5 databases.
 
     The upstream /{db}.json responses are stubbed by the stub_upstream fixture.
-    Asserts: 4 rows, names match ALLOWED_DATABASES, provenance.source and license.
+    Asserts: 5 rows, names match ALLOWED_DATABASES, provenance.source and license.
     """
     async with Client(mcp) as client:
         result = await client.call_tool("list_databases", {})
@@ -83,8 +83,8 @@ async def test_list_databases_returns_four_dbs(stub_upstream, bound_datasette_cl
         envelope = result.structured_content
         assert isinstance(envelope, dict), f"Expected dict envelope, got {type(envelope)}"
 
-        assert len(envelope["data"]) == 4, (
-            f"Expected 4 databases, got {len(envelope['data'])}: {envelope['data']}"
+        assert len(envelope["data"]) == len(config.ALLOWED_DATABASES), (
+            f"Expected {len(config.ALLOWED_DATABASES)} databases, got {len(envelope['data'])}: {envelope['data']}"
         )
         names = {row["name"] for row in envelope["data"]}
         assert names == set(config.ALLOWED_DATABASES), (
