@@ -143,9 +143,12 @@ def test_builder_query_text_only_in_params() -> None:
 
 
 def test_builder_shape_limit_and_join() -> None:
-    """Structural contract: fts JOIN table ON rowid, MATCH bound param,
-    ORDER BY _score ASC (bm25 is negative — best first), LIMIT literal,
-    window-function total, quoted identifiers."""
+    """Structural contract: bm25 isolated in the innermost `_hits` SELECT
+    (WR-260829 — a window function in the same SELECT as bm25 tears down the
+    fts5 cursor context), MATCH bound param, window-function total at the
+    `_ranked` level, ORDER BY _score ASC (bm25 is negative — best first),
+    LIMIT literal, JOIN back to the content table on rowid, quoted
+    identifiers."""
     sql, _ = build_bm25_sql(
         "zeeker-judgements",
         "judgments",
@@ -156,12 +159,16 @@ def test_builder_shape_limit_and_join() -> None:
         7,
     )
     # Real config weights for judgments: case_name 10.0, summary 5.0, court_summary 5.0.
-    assert 'bm25("judgments_fts", 10.0, 5.0, 5.0) AS _score' in sql
-    assert "count(*) OVER () AS _total" in sql
     assert (
-        'FROM "judgments_fts" JOIN "judgments" ON "judgments".rowid = "judgments_fts".rowid' in sql
+        'SELECT rowid AS _rid, bm25("judgments_fts", 10.0, 5.0, 5.0) AS _score '
+        'FROM "judgments_fts" WHERE "judgments_fts" MATCH :search_query LIMIT -1' in sql
     )
-    assert 'WHERE "judgments_fts" MATCH :search_query' in sql
+    assert "count(*) OVER () AS _total" in sql
+    # The window function must NOT share a SELECT level with the bm25 call.
+    bm25_level = sql[sql.index("bm25(") : sql.index(") _hits")]
+    assert "OVER ()" not in bm25_level
+    assert 'JOIN "judgments" ON "judgments".rowid = _ranked._rid' in sql
+    assert "ORDER BY _hits._score ASC LIMIT 7" in sql
     assert "ORDER BY _score ASC LIMIT 7" in sql
     # Citation-placeholder augmentation: judgments template references
     # {citation}/{court} beyond the preview columns — both selected.

@@ -112,24 +112,28 @@ def _generic_source(preview: dict[str, str | None] | None = None) -> FragmentSou
 
 
 def test_maxp_builder_shape_join_group_by() -> None:
-    """Structural contract: fragment fts JOIN fragment table ON rowid, JOIN
-    parent on pk=link, MATCH bound param, GROUP BY parent pk,
-    MIN(bm25(...)) AS _score (MaxP — bm25 is negative, MIN = best passage),
-    window-function total, ORDER BY _score ASC, LIMIT literal."""
+    """Structural contract: bm25 isolated in the innermost `_hits` SELECT
+    (WR-260829 — an aggregate over bm25 tears down the fts5 cursor context),
+    fragment fts JOIN fragment table ON rowid, GROUP BY the fragment link
+    column, MIN(_hits._score) AS _score (MaxP — bm25 is negative, MIN = best
+    passage), window-function total, parent joined on pk=link outside the
+    rollup, MATCH bound param, ORDER BY _score ASC, LIMIT literal."""
     sql, params = build_maxp_sql("zeeker-judgements", _judgments_source(), '"privacy"', 5)
 
     # No weights configured for the fragment table → single indexed body
     # column defaults to 1.0.
-    assert 'MIN(bm25("judgments_fragments_fts", 1.0)) AS _score' in sql
-    assert "count(*) OVER () AS _total" in sql
     assert (
+        'SELECT rowid AS _rid, bm25("judgments_fragments_fts", 1.0) AS _score '
         'FROM "judgments_fragments_fts" '
-        'JOIN "judgments_fragments" fr '
-        'ON fr.rowid = "judgments_fragments_fts".rowid' in sql
+        'WHERE "judgments_fragments_fts" MATCH :search_query LIMIT -1' in sql
     )
-    assert 'JOIN "judgments" p ON p."id" = fr."judgment_id"' in sql
-    assert 'WHERE "judgments_fragments_fts" MATCH :search_query' in sql
-    assert 'GROUP BY p."id"' in sql
+    # The aggregate consumes the plain _score column, NEVER bm25() directly.
+    assert "MIN(_hits._score) AS _score" in sql
+    assert "MIN(bm25(" not in sql
+    assert "count(*) OVER () AS _total" in sql
+    assert 'JOIN "judgments_fragments" fr ON fr.rowid = _hits._rid' in sql
+    assert 'GROUP BY fr."judgment_id"' in sql
+    assert 'JOIN "judgments" p ON p."id" = _parents._pid' in sql
     assert "ORDER BY _score ASC LIMIT 5" in sql
     assert params == {"search_query": '"privacy"'}
     # Preview + citation-placeholder columns resolve against the PARENT:
@@ -155,8 +159,9 @@ def test_maxp_builder_link_column_per_configured_source(key: str) -> None:
     )
     sql, _ = build_maxp_sql(db, source, '"x"', 20)
     parent = spec["parent_table"]
-    assert f'JOIN "{parent}" p ON p."{spec["parent_key"]}" = fr."{spec["parent_link"]}"' in sql
-    assert f'GROUP BY p."{spec["parent_key"]}"' in sql
+    assert f'JOIN "{parent}" p ON p."{spec["parent_key"]}" = _parents._pid' in sql
+    assert f'SELECT fr."{spec["parent_link"]}" AS _pid' in sql
+    assert f'GROUP BY fr."{spec["parent_link"]}"' in sql
 
 
 def test_maxp_builder_heavy_columns_never_selected() -> None:
@@ -209,7 +214,8 @@ def test_maxp_builder_weights_keyed_on_fragment_table(
         preview=dict(_PREVIEW_TU),
     )
     sql, _ = build_maxp_sql("dbA", source, '"x"', 20)
-    assert 'MIN(bm25("res_fragments_fts", 1.0, 2.0)) AS _score' in sql
+    assert 'bm25("res_fragments_fts", 1.0, 2.0) AS _score' in sql
+    assert "MIN(_hits._score) AS _score" in sql
     assert "DROP TABLE" not in sql
 
 
@@ -226,7 +232,8 @@ def test_maxp_builder_empty_fts_columns_uses_default_weights() -> None:
         preview=dict(_PREVIEW_TU),
     )
     sql, _ = build_maxp_sql("dbA", source, '"x"', 20)
-    assert 'MIN(bm25("docs_fragments_fts")) AS _score' in sql
+    assert 'bm25("docs_fragments_fts") AS _score' in sql
+    assert "MIN(_hits._score) AS _score" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +423,7 @@ async def test_fusion_parent_and_fragment_lists_merge(
     frag_reqs = [r for r in httpx_mock.get_requests() if r.url.path == "/dbB.json"]
     assert len(frag_reqs) == 1
     frag_sql = dict(frag_reqs[0].url.params)["sql"]
-    assert "GROUP BY" in frag_sql and "MIN(bm25(" in frag_sql
+    assert "GROUP BY" in frag_sql and "MIN(_hits._score)" in frag_sql
 
 
 async def test_fanout_legacy_ignores_fragment_sources(
@@ -555,7 +562,7 @@ async def test_handler_end_to_end_body_only_parent(
     assert len(sql_reqs) == 1
     qp = dict(sql_reqs[0].url.params)
     assert qp["search_query"] == '"privacy"'
-    assert "GROUP BY" in qp["sql"] and "MIN(bm25(" in qp["sql"]
+    assert "GROUP BY" in qp["sql"] and "MIN(_hits._score)" in qp["sql"]
     # User text absent from the SQL string itself (bound param only).
     assert "privacy" not in qp["sql"]
 

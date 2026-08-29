@@ -379,7 +379,7 @@ instructions.
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `query` | string | yes | — | Non-empty | Full-text query (FTS5 phrase-wrapped server-side) |
+| `query` | string | yes | — | Non-empty | Full-text query. Terms are AND-ed (all must appear, any order); wrap the whole query in double quotes for an exact adjacent phrase. FTS5 operators are escaped server-side and matched literally |
 | `databases` | array | no | `null` | — | Optional subset of databases to search. Defaults to all configured databases. |
 | `limit` | integer | no | `20` | 1–100 | Max rows to return |
 

@@ -106,7 +106,16 @@ _SEARCH_DESCRIPTION = (
 async def search(
     query: Annotated[
         str,
-        Field(description="Full-text query (FTS5 phrase-wrapped server-side)."),
+        Field(
+            description=(
+                "Full-text query. Terms are matched independently and combined "
+                "with AND (all terms must appear in a row, in any order or "
+                "position). Wrap the whole query in double quotes to require an "
+                "exact adjacent phrase instead. FTS5 operators (OR, NEAR, "
+                "column filters, wildcards) are escaped server-side and matched "
+                "literally, so they carry no special meaning here."
+            )
+        ),
     ],
     databases: Annotated[
         list[str] | None,
@@ -141,7 +150,8 @@ async def search(
       6. empty target_tables → empty envelope (multi-DB provenance)
       7. FTS5 escape — escape_fts5 on legacy (pre-#12 byte-identical),
          escape_user_query phrase-intent dispatch on ranked modes (issue #12)
-      8. fan_out_search dispatch (concurrent + 0.8s outer budget)
+      8. fan_out_search dispatch (concurrent + config.SEARCH_FAN_OUT_TIMEOUT_S
+         outer budget)
       9. all-fail mapping (all-400 → invalid_query / otherwise → upstream_unavailable)
      10. D4-13 defense-in-depth post-filter (race-condition guard)
      11. slice to limit + Envelope.for_search_results
@@ -251,7 +261,7 @@ async def search(
     # slices to `per_table_limit` as belt-and-suspenders. Issue #12: fts_info
     # routes tables through the BM25 SQL path when SEARCH_RANKING != "legacy";
     # Phase 3: fragment_sources adds MaxP passage lists to the same fan-out
-    # (same semaphore + 0.8s budget — no extra latency budget).
+    # (same semaphore + fan-out budget — no extra latency budget).
     fan_out_start = time.perf_counter()
     rows, upstream_total_hits, failed_tables, failure_statuses = await fan_out_search(
         escaped, target_tables, limit, fts_info, fragment_sources

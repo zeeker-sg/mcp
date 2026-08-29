@@ -13,7 +13,8 @@ Public surface:
 - `searchable_tables_for(db)` — FOUR-gate filter (fts_table-not-null / visible
   / not-denylist-suffix / preview-columns-resolvable), D4-02 (Plan 04-02).
 - `fan_out_search(escaped_query, target_tables, per_table_limit)` —
-  `anyio.create_task_group` + `move_on_after(0.8)` per D4-06; `zip_longest`
+  `anyio.create_task_group` + `move_on_after(config.SEARCH_FAN_OUT_TIMEOUT_S)`
+  per D4-06; `zip_longest`
   round-robin merge per D4-05 ("legacy" / "bm25" modes) or `_rrf_merge`
   ("bm25_rrf" — issue #12 Phase 2); returns 4-tuple including per-failure
   status codes for D4-09 case (c) detection (Plan 04-02).
@@ -338,22 +339,47 @@ def build_bm25_sql(
         — non-numeric config entries fall back to 1.0, bool excluded) and the
         integer LIMIT.
 
-    Shape:
+    Shape (three levels — the nesting is LOAD-BEARING, see below):
       SELECT <preview cols + citation-placeholder cols, table-qualified>,
-             bm25(<fts>, w1, ...) AS _score,
-             count(*) OVER () AS _total
-      FROM <fts> JOIN <table> ON <table>.rowid = <fts>.rowid
-      WHERE <fts> MATCH :search_query
+             _ranked._score AS _score, _ranked._total AS _total
+      FROM (SELECT _hits._rid AS _rid, _hits._score AS _score,
+                   count(*) OVER () AS _total
+            FROM (SELECT rowid AS _rid, bm25(<fts>, w1, ...) AS _score
+                  FROM <fts> WHERE <fts> MATCH :search_query LIMIT -1) _hits
+            ORDER BY _hits._score ASC LIMIT <n>) _ranked
+      JOIN <table> ON <table>.rowid = _ranked._rid
       ORDER BY _score ASC LIMIT <n>
 
+    - WHY THE NESTING (WR-260829 / production regression): SQLite FTS5
+      auxiliary functions (`bm25`, `snippet`, `highlight`) are only callable
+      while the fts5 cursor is positioned on the matched row. Putting a
+      WINDOW function (`count(*) OVER ()`) or an AGGREGATE in the SAME
+      SELECT as `bm25(...)` forces SQLite to buffer/sort rows first, which
+      tears down that cursor context and raises
+      `unable to use function bm25 in the requested context` — surfaced by
+      Datasette as HTTP 400. The failure is DATA-DEPENDENT: a zero-match
+      query never invokes bm25 and returns 200 with an empty row set, so
+      the pre-fix shape silently reported "0 hits" for every table that had
+      no hits and failed with a 400 for every table that did. bm25() is
+      therefore isolated in the innermost `_hits` SELECT, which contains no
+      window function, no aggregate, and no join.
+    - `LIMIT -1` on `_hits` is not a row cap (it means "no limit" in SQLite);
+      it BLOCKS the subquery-flattening optimization, which would otherwise
+      merge `_hits` back into the window-function level and re-break the
+      bm25 context.
     - Weights are emitted in FTS-INDEX COLUMN ORDER (`fts_columns`), one per
       indexed column — bm25() is positional. Config lookup is
       `config.SEARCH_BM25_WEIGHTS["<db>.<table>"]`; missing columns/tables
       default to 1.0 (the single tuning point lives in config).
     - bm25() returns NEGATIVE scores (best = most negative) → ORDER BY ASC.
-    - `count(*) OVER ()` is evaluated over the full MATCH result set BEFORE
-      LIMIT, giving the upstream-total-hits count in the SAME query (no
-      second COUNT round-trip). `_one_table` strips `_total` from rows.
+    - `count(*) OVER ()` sits at the `_ranked` level, where it sees the FULL
+      MATCH result set (window functions are evaluated before LIMIT), giving
+      the upstream-total-hits count in the SAME query (no second COUNT
+      round-trip). `_one_table` reads `_total` from the first row.
+    - Only the top-`<n>` rowids reach the JOIN against the content table, so
+      the (potentially large) preview/citation columns are materialized for
+      at most `per_table_limit` rows — this is what keeps the biggest corpus
+      (zeeker-judgements.judgments) inside the fan-out budget.
     - SELECT list mirrors the legacy `_col=` projection: preview columns in
       preview-field order, then citation-placeholder columns (sorted) that
       the template needs but preview doesn't carry — the same augmentation
@@ -372,13 +398,23 @@ def build_bm25_sql(
     # Zero-arg fallback (fts_columns unknown): bm25(<fts>) uses default 1.0
     # weights — still valid SQL, still relevance-ordered.
     bm25_expr = f"bm25({fq}, {', '.join(weight_literals)})" if weight_literals else f"bm25({fq})"
+    n = int(per_table_limit)
+    # Innermost level: bm25() alone with the fts5 cursor context intact.
+    hits = (
+        f"SELECT rowid AS _rid, {bm25_expr} AS _score "
+        f"FROM {fq} WHERE {fq} MATCH :search_query LIMIT -1"
+    )
+    # Middle level: relevance order + full-match-set count, no bm25 call.
+    ranked = (
+        f"SELECT _hits._rid AS _rid, _hits._score AS _score, count(*) OVER () AS _total "
+        f"FROM ({hits}) _hits ORDER BY _hits._score ASC LIMIT {n}"
+    )
     sql = (
         f"SELECT {select_list}, "  # noqa: S608 — identifiers from upstream metadata only
-        f"{bm25_expr} AS _score, "
-        f"count(*) OVER () AS _total "
-        f"FROM {fq} JOIN {tq} ON {tq}.rowid = {fq}.rowid "
-        f"WHERE {fq} MATCH :search_query "
-        f"ORDER BY _score ASC LIMIT {int(per_table_limit)}"
+        f"_ranked._score AS _score, _ranked._total AS _total "
+        f"FROM ({ranked}) _ranked "
+        f"JOIN {tq} ON {tq}.rowid = _ranked._rid "
+        f"ORDER BY _score ASC LIMIT {n}"
     )
     return sql, {"search_query": escaped_query}
 
@@ -508,21 +544,36 @@ def build_maxp_sql(
     quoted via `_qi`); the only interpolated values are the validated numeric
     bm25 weights and the integer LIMIT.
 
-    Shape (MaxP: best passage per parent document):
+    Shape (MaxP: best passage per parent document — three levels, the nesting
+    is LOAD-BEARING for the same reason as `build_bm25_sql`):
       SELECT p.<parent preview + citation-placeholder cols>,
-             MIN(bm25(<frag_fts>, w1, ...)) AS _score,
-             count(*) OVER () AS _total
-      FROM <frag_fts>
-      JOIN <frag_table> fr ON fr.rowid = <frag_fts>.rowid
-      JOIN <parent> p ON p.<parent_key> = fr.<parent_link>
-      WHERE <frag_fts> MATCH :search_query
-      GROUP BY p.<parent_key>
+             _parents._score AS _score, _parents._total AS _total
+      FROM (SELECT fr.<parent_link> AS _pid,
+                   MIN(_hits._score) AS _score,
+                   count(*) OVER () AS _total
+            FROM (SELECT rowid AS _rid, bm25(<frag_fts>, w1, ...) AS _score
+                  FROM <frag_fts> WHERE <frag_fts> MATCH :search_query
+                  LIMIT -1) _hits
+            JOIN <frag_table> fr ON fr.rowid = _hits._rid
+            GROUP BY fr.<parent_link>
+            ORDER BY _score ASC LIMIT <n>) _parents
+      JOIN <parent> p ON p.<parent_key> = _parents._pid
       ORDER BY _score ASC LIMIT <n>
 
+    - WHY THE NESTING (WR-260829 / production regression): an FTS5 auxiliary
+      function only works while the fts5 cursor sits on the matched row.
+      `MIN(bm25(...))` — an AGGREGATE over bm25 — tears that context down and
+      raises `unable to use function bm25 in the requested context` (HTTP 400
+      via Datasette) for any query that actually matches something; a
+      zero-match query never calls bm25 and returns 200/empty, which is what
+      made the pre-fix bug read as "0 hits everywhere". bm25() therefore lives
+      alone in the innermost `_hits` SELECT and the aggregate consumes its
+      plain `_score` column. `LIMIT -1` ("no limit" in SQLite) blocks the
+      subquery-flattening optimization that would undo the separation.
     - bm25() is NEGATIVE (best = most negative) → MIN() picks each parent's
       BEST passage score (that's the MaxP), and ORDER BY ASC ranks parents.
-    - The bare `p.*` select columns are constant per group (grouped by the
-      parent pk), so the GROUP BY projection is well-defined.
+    - Grouping is on the FRAGMENT's link column, not the parent pk, so the
+      parent table is joined only for the top `<n>` groups.
     - `count(*) OVER ()` runs AFTER grouping and BEFORE LIMIT → the number of
       DISTINCT matched parent documents, surfaced as the per-source upstream
       total under the "<db>.<fragment_table>" key (no second round-trip).
@@ -542,16 +593,27 @@ def build_maxp_sql(
     link = _qi(source.parent_link)
     select_list = ", ".join(f"p.{_qi(c)}" for c in select_cols)
     bm25_expr = f"bm25({fq}, {', '.join(weight_literals)})" if weight_literals else f"bm25({fq})"
+    n = int(per_table_limit)
+    # Innermost level: bm25() alone with the fts5 cursor context intact.
+    hits = (
+        f"SELECT rowid AS _rid, {bm25_expr} AS _score "
+        f"FROM {fq} WHERE {fq} MATCH :search_query LIMIT -1"
+    )
+    # Middle level: MaxP rollup per parent + distinct-parent count, no bm25 call.
+    parents = (
+        f"SELECT fr.{link} AS _pid, MIN(_hits._score) AS _score, "  # noqa: S608
+        f"count(*) OVER () AS _total "
+        f"FROM ({hits}) _hits "
+        f"JOIN {frq} fr ON fr.rowid = _hits._rid "
+        f"GROUP BY fr.{link} "
+        f"ORDER BY _score ASC LIMIT {n}"
+    )
     sql = (
         f"SELECT {select_list}, "  # noqa: S608 — identifiers from config/upstream metadata only
-        f"MIN({bm25_expr}) AS _score, "
-        f"count(*) OVER () AS _total "
-        f"FROM {fq} "
-        f"JOIN {frq} fr ON fr.rowid = {fq}.rowid "
-        f"JOIN {pq} p ON p.{pk} = fr.{link} "
-        f"WHERE {fq} MATCH :search_query "
-        f"GROUP BY p.{pk} "
-        f"ORDER BY _score ASC LIMIT {int(per_table_limit)}"
+        f"_parents._score AS _score, _parents._total AS _total "
+        f"FROM ({parents}) _parents "
+        f"JOIN {pq} p ON p.{pk} = _parents._pid "
+        f"ORDER BY _score ASC LIMIT {n}"
     )
     return sql, {"search_query": escaped_query}
 
@@ -913,7 +975,7 @@ async def fan_out_search(
     SQL) whose rows are PARENT rows, merged as one more per-list input keyed
     `(db, source.merge_key)`; its upstream total lands under the distinct
     `"<db>.<fragment_table>"` key. Fragment tasks run inside the SAME
-    semaphore + 0.8s move_on_after budget — no extra latency budget. In
+    semaphore + move_on_after budget — no extra latency budget. In
     "legacy" mode fragment sources are ignored defensively (discovery
     already returns none — the SQL path needs the owner token).
 
@@ -925,14 +987,21 @@ async def fan_out_search(
     - `upstream_total_hits`: dict keyed `"<db>.<table>"` → upstream
       `filtered_table_rows_count`. A failed table does NOT get an entry —
       the caller can derive failures via `failed_tables` count + missing keys.
-    - `failed_tables`: count of per-table tasks that raised
-      `UpstreamCallFailed`. Cancellation via the move_on_after budget
-      contributes nothing — partial results are the documented behavior
-      (Pitfall 4 / 04-CONTEXT D4-07).
+    - `failed_tables`: count of dispatched targets that did NOT return rows —
+      those that raised `UpstreamCallFailed` PLUS those still in flight when
+      the `config.SEARCH_FAN_OUT_TIMEOUT_S` budget expired and were
+      cancelled. WR-260829: cancellation used to contribute nothing, which
+      made a timed-out table indistinguishable from a genuine "0 hits" — the
+      envelope silently under-reported instead of saying it never heard back.
+      A cancelled target is absent from `upstream_total_hits` AND counted
+      here, so the caller can always tell "asked, got nothing back" from
+      "asked, upstream said zero".
     - `failure_statuses`: ordered list of per-failure
-      `UpstreamCallFailed.status` values (or `None` for transport-layer
-      failures). The handler uses this to detect all-tables-400 and map
-      to `invalid_query` per D4-09 case (c) / 04-RESEARCH §3.7.
+      `UpstreamCallFailed.status` values (`None` for transport-layer failures
+      and for budget-cancelled targets). The handler uses this to detect
+      all-tables-400 and map to `invalid_query` per D4-09 case (c) /
+      04-RESEARCH §3.7; a cancelled target contributes `None`, so a timeout
+      can never be misread as an FTS5 syntax error.
 
     NEVER raises. Failures are aggregated; the orchestrator returns the
     4-tuple regardless. The handler decides whether to promote to
@@ -967,12 +1036,14 @@ async def fan_out_search(
     # concurrent connections: worst case 10 searches × 10 = 100 (search) +
     # 40 (non-search) = 140, within the pool limit of 150.
     sem = anyio.Semaphore(10)
-    # D4-06: structured concurrency under an outer 0.8s budget. The
-    # move_on_after cancellation surfaces as task cancellation inside the
-    # task group; cancelled tasks contribute nothing (no failure increment)
-    # per 04-CONTEXT D4-07. Tasks that completed before the deadline have
-    # already populated out_rows / out_totals.
-    with anyio.move_on_after(0.8):
+    # D4-06: structured concurrency under the outer
+    # config.SEARCH_FAN_OUT_TIMEOUT_S budget. The move_on_after cancellation
+    # surfaces as task cancellation inside the task group; tasks that
+    # completed before the deadline have already populated out_rows /
+    # out_totals. WR-260829: cancelled tasks are reconciled into the failure
+    # count AFTER the block (see below) so a timeout is never reported as a
+    # zero-hit table.
+    with anyio.move_on_after(config.SEARCH_FAN_OUT_TIMEOUT_S):
         async with anyio.create_task_group() as tg:
             for db, table, preview in target_tables:
                 tg.start_soon(
@@ -989,7 +1060,7 @@ async def fan_out_search(
                     sem,
                 )
             # Issue #12 Phase 3: fragment passage-search tasks share the SAME
-            # semaphore and outer 0.8s budget — no extra latency budget.
+            # semaphore and outer fan-out budget — no extra latency budget.
             for db, source in frag_targets:
                 tg.start_soon(
                     _one_fragment,
@@ -1012,4 +1083,21 @@ async def fan_out_search(
     else:
         merged = _round_robin_merge(out_rows, per_table_limit)
     failure_statuses: list[int | None] = [getattr(exc, "status", None) for exc in failures]
-    return merged, out_totals, len(failures), failure_statuses
+
+    # WR-260829: reconcile budget-cancelled targets. Every dispatched target
+    # either recorded an upstream total (success) or appended to `failures`;
+    # anything unaccounted for was cancelled by the move_on_after budget.
+    # Count it as a failure with status None so the envelope's failed_tables
+    # is honest and the handler's all-400 → invalid_query promotion can never
+    # fire on a timeout.
+    dispatched = len(target_tables) + len(frag_targets)
+    cancelled = max(0, dispatched - len(out_totals) - len(failures))
+    if cancelled:
+        log.warning(
+            "search_fan_out_budget_exceeded",
+            dispatched=dispatched,
+            cancelled=cancelled,
+            budget_s=config.SEARCH_FAN_OUT_TIMEOUT_S,
+        )
+        failure_statuses.extend([None] * cancelled)
+    return merged, out_totals, len(failures) + cancelled, failure_statuses
