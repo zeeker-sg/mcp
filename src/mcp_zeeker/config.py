@@ -925,3 +925,56 @@ SEARCH_FRAGMENT_SOURCES: dict[str, dict[str, str]] = {
         "parent_key": "id",
     },
 }
+
+# ---------------------------------------------------------------------------
+# Issue #18 — Background FTS index warmer
+# ---------------------------------------------------------------------------
+
+# An unscoped `search()` against a COLD upstream FTS index fails the large
+# fragment tables with HTTP 400 "SQL query took too long" (observed on
+# judgments_fragments at 1.1–1.9s cold, 0.05–0.4s warm, 2026-08-29). Warmth
+# decays between requests, so a once-a-day workload (the daily briefing)
+# eats the timeout most mornings. The warmer replays representative FTS
+# queries against every searchable table on a fixed interval so the upstream
+# index pages stay cached around the clock.
+
+# Master switch. Env var FTS_WARMER_ENABLED overrides ("0"/"false"/"no"/"off"
+# disable, any other non-empty value enables). Default ON — the whole point
+# is that it protects workloads that don't think about index warmth.
+_FTS_WARMER_ENABLED_RAW: str = os.getenv("FTS_WARMER_ENABLED", "").strip().lower()
+FTS_WARMER_ENABLED: bool = _FTS_WARMER_ENABLED_RAW not in ("0", "false", "no", "off")
+
+# Seconds between warm passes. FTS page-cache warmth decays over hours, so
+# the interval must be far below the decay horizon; 10 minutes costs ~2 FTS
+# queries per table per interval against 26 tables — negligible against the
+# Datasette rate envelope, and 6× tighter than the observed decay windows.
+# Env var FTS_WARMER_INTERVAL_S overrides (non-numeric or < 60 falls back).
+_FTS_WARMER_INTERVAL_RAW: str = os.getenv("FTS_WARMER_INTERVAL_S", "")
+FTS_WARMER_INTERVAL_S: float = (
+    float(_FTS_WARMER_INTERVAL_RAW)
+    if _FTS_WARMER_INTERVAL_RAW.replace(".", "", 1).isdigit()
+    and float(_FTS_WARMER_INTERVAL_RAW) >= 60
+    else 600.0
+)
+
+# Per-pass cancellation budget in seconds. One warm query per target with
+# ~15-20 targets must comfortably finish inside the interval; anything still
+# running at the budget is cancelled (a warm query is best-effort — a stalled
+# target must never wedge the loop nor stack up behind the connection pool).
+# Env var FTS_WARMER_TIMEOUT_S overrides (non-numeric, < 1, or >= interval
+# falls back).
+_FTS_WARMER_TIMEOUT_RAW: str = os.getenv("FTS_WARMER_TIMEOUT_S", "")
+FTS_WARMER_TIMEOUT_S: float = (
+    float(_FTS_WARMER_TIMEOUT_RAW)
+    if _FTS_WARMER_TIMEOUT_RAW.replace(".", "", 1).isdigit()
+    and 1.0 <= float(_FTS_WARMER_TIMEOUT_RAW) < FTS_WARMER_INTERVAL_S
+    else 120.0
+)
+
+# The representative query each warm pass dispatches. "contract" is the
+# judgment corpus's most frequent unambiguous catchword (from the live tag
+# histogram) — every FTS index in every database has genuine matches for it,
+# which is what forces the index pages (and the bm25 ordering path) to page
+# in. The value travels ONLY as the bound :search_query parameter (INJ-05);
+# it never appears in the SQL text.
+FTS_WARM_QUERY: str = os.getenv("FTS_WARM_QUERY", "contract")
