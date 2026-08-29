@@ -16,6 +16,12 @@ services:
       # upstream content past the strip-columns catalogue lockdown.
       # Set in the host .env; empty → anonymous-tier (stripped) access.
       ZEEKER_FULL_ACCESS_TOKEN: ${ZEEKER_FULL_ACCESS_TOKEN:-}
+      # Wall-clock budget (seconds) for the whole per-search upstream fan-out.
+      # Targets still in flight when it expires are cancelled and reported in
+      # the envelope's `failed_tables`. Raise it if
+      # `search_fan_out_budget_exceeded` warnings appear in the logs; lower it
+      # to trade recall for latency. Empty → 2.0s default.
+      SEARCH_FAN_OUT_TIMEOUT_S: ${SEARCH_FAN_OUT_TIMEOUT_S:-}
     ports:
       - "127.0.0.1:8002:8000"
     networks: [zeeker-datasette_default]

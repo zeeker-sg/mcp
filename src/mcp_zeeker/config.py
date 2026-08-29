@@ -759,6 +759,26 @@ SEARCH_PREVIEW_OVERRIDES: dict[str, dict[str, str | None]] = {
     },
 }
 
+# D4-06: wall-clock budget (seconds) for the whole per-search upstream
+# fan-out. Targets that have not answered when it expires are cancelled;
+# `core.search.fan_out_search` counts them as failures so a cancelled table
+# can never be mistaken for a genuine "0 hits" (WR-260829).
+#
+# The original 0.8s was tuned against the small corpora. It is too tight for
+# zeeker-judgements (a 2.5 GB database whose FTS scan plus join routinely
+# needs north of a second), which is why the largest and most relevant table
+# never appeared in `upstream_total_hits`. 2.0s keeps the tool inside the
+# PRD's p95 < 1.5 s target for the common case (every small table answers in
+# well under a second) while giving the big corpus room to finish.
+# Env var SEARCH_FAN_OUT_TIMEOUT_S overrides for operational tuning; a
+# non-numeric or non-positive value falls back to the 2.0s default.
+_FAN_OUT_TIMEOUT_RAW: str = os.getenv("SEARCH_FAN_OUT_TIMEOUT_S", "")
+SEARCH_FAN_OUT_TIMEOUT_S: float = (
+    float(_FAN_OUT_TIMEOUT_RAW)
+    if _FAN_OUT_TIMEOUT_RAW.replace(".", "", 1).isdigit() and float(_FAN_OUT_TIMEOUT_RAW) > 0
+    else 2.0
+)
+
 # ---------------------------------------------------------------------------
 # Issue #12 Phase 1 — BM25 search ranking (SEARCH_RANKING / SEARCH_BM25_WEIGHTS)
 # ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 
+import anyio
 import httpx
 import pytest
 import pytest_httpx
@@ -256,3 +257,80 @@ async def test_upstream_total_hits_aggregated(
     _rows, totals, _failed, _statuses = await fan_out_search('"x"', target, per_table_limit=6)
 
     assert totals == {"dbA.t1": 7, "dbA.t2": 42}
+
+
+# ---------------------------------------------------------------------------
+# WR-260829 — budget-cancelled targets must be visible, not silently dropped
+# ---------------------------------------------------------------------------
+
+
+async def test_budget_cancelled_table_counts_as_failed(
+    datasette_client, httpx_mock: pytest_httpx.HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target still in flight when the fan-out budget expires is reported.
+
+    Production symptom (2026-08-29): `zeeker-judgements.judgments` — the
+    largest and most relevant table — never appeared in `upstream_total_hits`
+    and `failed_tables` was 0, so the envelope was indistinguishable from
+    "asked, upstream said zero hits". It had simply blown the 0.8s budget and
+    been cancelled. A cancelled target must be ABSENT from the totals map AND
+    counted in `failed_tables`, with a `None` status so the handler's
+    all-400 → invalid_query promotion can never misread a timeout as an FTS5
+    syntax error.
+    """
+    from mcp_zeeker.core.search import fan_out_search
+
+    monkeypatch.setattr(config, "SEARCH_FAN_OUT_TIMEOUT_S", 0.05)
+
+    async def _slow(_request: httpx.Request) -> httpx.Response:
+        await anyio.sleep(5)
+        return httpx.Response(200, json=_rows_payload([]))
+
+    httpx_mock.add_response(
+        url=_table_url_re("dbA", "fast"),
+        json=_rows_payload([{"title": "A1", "source_url": "https://example.com/a1"}], 7),
+    )
+    httpx_mock.add_callback(_slow, url=_table_url_re("dbA", "slow"))
+
+    target = [
+        ("dbA", "fast", _PREVIEW_TU),
+        ("dbA", "slow", _PREVIEW_TU),
+    ]
+    rows, totals, failed, statuses = await fan_out_search('"x"', target, per_table_limit=6)
+
+    # The fast table's result still comes back — partial results are the
+    # documented behavior (D4-07); only the accounting changed.
+    assert [r["title"] for r in rows] == ["A1"]
+    assert totals == {"dbA.fast": 7}
+    assert failed == 1, "the cancelled table must be counted, not silently dropped"
+    assert statuses == [None], "a timeout carries no HTTP status"
+
+
+async def test_budget_is_configurable(
+    datasette_client, httpx_mock: pytest_httpx.HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fan-out budget reads config.SEARCH_FAN_OUT_TIMEOUT_S at dispatch time.
+
+    A response slower than the default 0.8s that shipped originally must now
+    complete, so raising the budget for the big corpus is a config change and
+    not a code change.
+    """
+    from mcp_zeeker.core.search import fan_out_search
+
+    monkeypatch.setattr(config, "SEARCH_FAN_OUT_TIMEOUT_S", 3.0)
+
+    async def _slowish(_request: httpx.Request) -> httpx.Response:
+        await anyio.sleep(1.0)
+        return httpx.Response(
+            200, json=_rows_payload([{"title": "A1", "source_url": "https://e/a1"}], 7)
+        )
+
+    httpx_mock.add_callback(_slowish, url=_table_url_re("dbA", "t1"))
+
+    rows, totals, failed, statuses = await fan_out_search(
+        '"x"', [("dbA", "t1", _PREVIEW_TU)], per_table_limit=6
+    )
+
+    assert [r["title"] for r in rows] == ["A1"]
+    assert totals == {"dbA.t1": 7}
+    assert failed == 0 and statuses == []

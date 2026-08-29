@@ -77,7 +77,7 @@ async def bound_live_clients():
 
 @pytest.mark.live
 async def test_live_list_databases(bound_live_clients) -> None:
-    """TEST-02: live list_databases returns all 4 configured DBs from data.zeeker.sg.
+    """TEST-02: live list_databases returns every configured DB from data.zeeker.sg.
 
     Shape invariant: provenance.source + non-empty data list.
     Content invariant: exactly 4 databases (catches a silent fifth DB appearing upstream).
@@ -86,9 +86,11 @@ async def test_live_list_databases(bound_live_clients) -> None:
 
     assert envelope.provenance.source == "data.zeeker.sg"
     assert len(envelope.data) >= 1
-    # The four configured databases are stable since Phase 1 — assert count to
-    # catch "fifth DB silently appearing upstream" without asserting on names.
-    assert len(envelope.data) == 4  # noqa: PLR2004
+    # Assert the catalogue matches config exactly — catches a DB silently
+    # appearing or disappearing upstream without asserting a magic count that
+    # goes stale every time the catalogue grows (it did: sg-law-cookies made
+    # the original literal `4` wrong).
+    assert {row["name"] for row in envelope.data} == set(config.ALLOWED_DATABASES)
 
 
 @pytest.mark.live
@@ -130,6 +132,65 @@ async def test_live_search(bound_live_clients) -> None:
     "Live-test invariant").
     """
     envelope = await search(query="data protection", limit=5)
+
+    assert envelope.provenance.source == "data.zeeker.sg"
+    assert isinstance(envelope.data, list)
+
+
+@pytest.mark.live
+async def test_live_search_returns_hits_datasette_also_finds(bound_live_clients) -> None:
+    """WR-260829 regression: MCP search must not return [] for a term that
+    Datasette itself matches.
+
+    This is the ONE live search assertion that is not shape-only, and it earns
+    the exception by deriving its expectation from upstream rather than from a
+    hard-coded corpus fact: it first asks Datasette's own table-view FTS
+    (``?_search=``) whether the term matches ``zeeker-judgements.judgments``,
+    then requires MCP's search to be non-empty too. If the corpus ever stops
+    containing the term, the direct probe returns zero and the test skips
+    rather than failing — so it can only fail when MCP and Datasette DISAGREE.
+
+    The 2026-08-29 outage is exactly that disagreement: ``_search=oppression``
+    returned real rows upstream while MCP returned ``data: []`` with every
+    ``upstream_total_hits`` entry at 0, because the BM25 SQL raised
+    ``unable to use function bm25 in the requested context`` on any query that
+    actually matched (see tests/core/test_search_sql_executes.py).
+    """
+    term = "oppression"
+    client = DatasetteClient.current()
+    direct = await client.get_table_rows(
+        _FETCH_DATABASE,
+        _FETCH_TABLE,
+        [("_search", term), ("_size", "1"), ("_sort", "rowid"), ("_col", "citation")],
+    )
+    upstream_hits = int(direct.get("filtered_table_rows_count") or 0)
+    if upstream_hits == 0:
+        pytest.skip(f"upstream corpus no longer matches {term!r} — nothing to compare against")
+
+    envelope = await search(query=term, databases=[_FETCH_DATABASE], limit=5)
+
+    assert envelope.provenance.source == "data.zeeker.sg"
+    assert envelope.data, (
+        f"Datasette matched {upstream_hits} row(s) for {term!r} but MCP search returned none "
+        f"(failed_tables={envelope.pagination.failed_tables}, "
+        f"upstream_total_hits={envelope.pagination.upstream_total_hits})"
+    )
+    # The table Datasette matched must be represented in the observability map
+    # — a silently cancelled or failed target is what made this bug invisible.
+    assert envelope.pagination.upstream_total_hits.get(f"{_FETCH_DATABASE}.{_FETCH_TABLE}")
+    assert envelope.pagination.failed_tables == 0
+
+
+@pytest.mark.live
+async def test_live_search_common_word_is_not_rejected(bound_live_clients) -> None:
+    """WR-260829: a single common word is a valid query, never ``invalid_query``.
+
+    ``search(query="data", databases=["pdpc"])`` returned
+    ``invalid_query: query syntax not supported`` in production because EVERY
+    pdpc target failed with HTTP 400 (the bm25 context error), which the
+    handler's D4-09 case (c) promoted to a syntax error.
+    """
+    envelope = await search(query="data", databases=["pdpc"], limit=5)
 
     assert envelope.provenance.source == "data.zeeker.sg"
     assert isinstance(envelope.data, list)
