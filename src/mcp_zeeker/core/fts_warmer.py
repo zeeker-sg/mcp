@@ -55,6 +55,7 @@ import anyio
 import structlog
 
 from mcp_zeeker import config
+from mcp_zeeker.core import visibility
 from mcp_zeeker.core.datasette_client import DatasetteClient
 from mcp_zeeker.core.fts_escape import escape_fts5
 from mcp_zeeker.core.search import (
@@ -179,7 +180,20 @@ class FtsWarmer:
             escaped = self._escaped_warm_query()
             for db in config.ALLOWED_DATABASES:
                 try:
-                    tables, fragments = await select_warm_targets(db)
+                    # WR-260830: route discovery through the cache-aware shared
+                    # entry points and memoize per DB (one summary + one
+                    # visible-set fetch per DB per pass, fed to BOTH gates —
+                    # #6b/#9 contract). The raw client path used here
+                    # previously re-fetched the 615MB /{db}.json summary every
+                    # pass and a mid-pass timeout skipped the whole DB —
+                    # fragment warming included. _get_database_summary rides
+                    # the DatabaseSummaryCache (stale-on-error), so build-time
+                    # summary blips no longer blind a pass.
+                    summary = await visibility._get_database_summary(db)
+                    visible = await visibility._visible_tables(db)
+                    tables, fragments = await select_warm_targets(
+                        db, summary=summary, visible=visible
+                    )
                 except Exception as exc:
                     # Discovery failure (upstream down, cache unbound, client
                     # unbound) — skip the DB this pass; recorded so the pass

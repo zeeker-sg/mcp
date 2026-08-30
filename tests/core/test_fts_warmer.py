@@ -165,6 +165,80 @@ async def test_select_warm_targets_hidden_fragment_dropped(monkeypatch) -> None:
     assert fragments == []
 
 
+async def test_warm_once_uses_shared_summary_entry(monkeypatch) -> None:
+    """WR-260830 live finding: warm_once must route discovery through the
+    cache-aware shared entry points (_get_database_summary / _visible_tables)
+    — NOT the raw DatasetteClient.get_database.
+
+    Verified live 2026-08-30: pass 2's raw-summary fetch for the 615MB
+    zeeker-judgements DB timed out mid-pass (builds swap the .db file; counts
+    re-scan cold), so the whole DB — fragment warming included — was skipped.
+    The DatabaseSummaryCache serves stale-on-error through exactly this
+    window; the raw client does not.
+
+    Contract: one summary + one visible-set fetch per DB per pass, consumed
+    by BOTH the table and fragment gates (memoization, #6b/#9), and zero
+    additional raw discovery round-trips."""
+
+    from mcp_zeeker.core import visibility
+    from mcp_zeeker.core.fts_warmer import FtsWarmer
+
+    monkeypatch.setattr(config, "FTS_WARM_QUERY", "contract")
+    monkeypatch.setattr(
+        config,
+        "ALLOWED_DATABASES",
+        ("zeeker-judgements", "sg-law-cookies"),
+    )
+    monkeypatch.setattr(config, "SEARCH_RANKING", "bm25_rrf")
+
+    calls = {"summary": 0, "visible": 0, "raw_get_database": 0}
+
+    async def _fake_summary(db):
+        calls["summary"] += 1
+        if db == "zeeker-judgements":
+            return _judgements_summary()
+        return DatabaseSummary(tables=[])
+
+    async def _fake_visible(db):
+        calls["visible"] += 1
+        if db == "zeeker-judgements":
+            return {t.name for t in _judgements_summary().tables if not t.hidden}
+        return set()
+
+    monkeypatch.setattr(visibility, "_get_database_summary", _fake_summary)
+    monkeypatch.setattr(visibility, "_visible_tables", _fake_visible)
+
+    from mcp_zeeker.core.datasette_client import DatasetteClient
+
+    async def _boom(db):
+        calls["raw_get_database"] += 1
+        raise AssertionError("warm pass must not fetch summaries via the raw client")
+
+    monkeypatch.setattr(DatasetteClient, "get_database", _boom)
+
+    # Bind a client for the warm DISPATCH calls (SQL over mock transport).
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"rows": [{"case_name": "A v B", "_score": -1.0, "_total": 1}]}
+        )
+
+    async with httpx.AsyncClient(
+        base_url=config.UPSTREAM_URL,
+        transport=httpx.MockTransport(_handler),
+    ) as http:
+        token = DatasetteClient.bind(DatasetteClient(http))
+        try:
+            result = await FtsWarmer().warm_once()
+        finally:
+            DatasetteClient.reset(token)
+
+    # Both DBs discovered exactly once each; no raw upstream discovery.
+    assert calls == {"summary": 2, "visible": 2, "raw_get_database": 0}
+    # The fragment source was still discovered for zeeker-judgements (the
+    # memoized summary fed the fragment gate too) and the warm dispatch ran.
+    assert result.get("zeeker-judgements.judgments_fragments") == "ok"
+
+
 # ---------------------------------------------------------------------------
 # 2. warm_once dispatch (SQL path — the production ranking mode)
 # ---------------------------------------------------------------------------
