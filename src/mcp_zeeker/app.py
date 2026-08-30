@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 
+import anyio
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
@@ -122,10 +123,23 @@ async def lifespan(app: Starlette):
         dsc = DatabaseSummaryCache(dc, ttl=config.DATABASE_SUMMARY_TTL_SECONDS)
         dsc_token = DatabaseSummaryCache.bind(dsc)
         pk_token = ParentPKCache.bind(ParentPKCache())
+        # Issue #18: start the background FTS index warmer AFTER the caches
+        # are bound, so its discovery uses the DatabaseSummaryCache exactly
+        # like a real search. Cancelled on shutdown (finally, below).
+        warmer_task_group = None
+        if config.FTS_WARMER_ENABLED:
+            from mcp_zeeker.core.fts_warmer import FtsWarmer
+
+            warmer_task_group = anyio.create_task_group()
+            await warmer_task_group.__aenter__()
+            warmer_task_group.start_soon(FtsWarmer().run_forever)
         try:
             async with mcp_app.lifespan(mcp_app):  # MUST be nested (Pitfall 1)
                 yield
         finally:
+            if warmer_task_group is not None:
+                warmer_task_group.cancel_scope.cancel()
+                await warmer_task_group.__aexit__(None, None, None)
             ParentPKCache.reset(pk_token)
             DatabaseSummaryCache.reset(dsc_token)
             DatasetteClient.reset(token)
