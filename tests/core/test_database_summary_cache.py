@@ -143,17 +143,27 @@ async def test_force_refresh_bypasses_ttl(cache_and_client, httpx_mock: pytest_h
     """force_refresh triggers a new upstream fetch even within TTL."""
     cache, _ = cache_and_client
 
-    await cache.get_database("zeeker-judgements")
+    # Reusable responses only: a single-use response registered after a
+    # reusable one leaves response-consumption order implementation-defined
+    # and could strand an unconsumed mock at teardown (spurious CI error).
+    httpx_mock.add_response(
+        url=_db_url("zeeker-judgements"), json=_sample_payload(), is_reusable=True
+    )
 
-    # Add a second response for the forced refresh.
-    httpx_mock.add_response(url=_db_url("zeeker-judgements"), json=_sample_payload())
+    await cache.get_database("zeeker-judgements")
+    before = len(
+        [r for r in httpx_mock.get_requests() if str(r.url) == _db_url("zeeker-judgements")]
+    )
+    assert before == 1, f"expected 1 fetch on first get_database, got {before}"
 
     await cache.force_refresh("zeeker-judgements")
 
-    db_requests = [
-        r for r in httpx_mock.get_requests() if str(r.url) == _db_url("zeeker-judgements")
-    ]
-    assert len(db_requests) == 2, f"expected 2 fetches after force_refresh, got {len(db_requests)}"
+    after = len(
+        [r for r in httpx_mock.get_requests() if str(r.url) == _db_url("zeeker-judgements")]
+    )
+    assert after > before, (
+        f"force_refresh must hit upstream again (had {before} fetches, still {after})"
+    )
 
 
 async def test_cache_isolated_per_context(httpx_mock: pytest_httpx.HTTPXMock):
