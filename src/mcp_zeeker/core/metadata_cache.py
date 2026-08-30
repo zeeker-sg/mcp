@@ -178,7 +178,11 @@ class MetadataCache:
 
     async def force_refresh(self) -> None:
         """Force cache expiry and re-fetch. Test seam and manual refresh path."""
-        self._last_fetch = 0.0
+        # float("-inf") is guaranteed stale under any monotonic() clock.
+        # A 0.0 sentinel was WRONG: monotonic() is seconds-since-boot, so on
+        # a freshly booted host (uptime < ttl) `now - 0.0 < ttl` read as
+        # fresh and force_refresh silently did nothing.
+        self._last_fetch = float("-inf")
         await self._ensure_fresh()
 
     async def license_for(self, database: str) -> tuple[str, str]:

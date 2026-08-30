@@ -157,11 +157,15 @@ class DatabaseSummaryCache:
     async def force_refresh(self, db: str | None = None) -> None:
         """Force cache expiry for `db` (or all DBs if None) and re-fetch.
         Test seam and manual refresh path."""
+        # float("-inf") is guaranteed stale under any monotonic() clock.
+        # A 0.0 sentinel was WRONG: monotonic() is seconds-since-boot, so on
+        # a freshly booted host (uptime < ttl) `now - 0.0 < ttl` read as
+        # fresh and force_refresh silently did nothing.
         if db is not None:
-            self._last_fetch[db] = 0.0
+            self._last_fetch[db] = float("-inf")
             await self.get_database(db)
         else:
             for d in list(self._data.keys()):
-                self._last_fetch[d] = 0.0
+                self._last_fetch[d] = float("-inf")
             for d in list(self._data.keys()):
                 await self.get_database(d)
