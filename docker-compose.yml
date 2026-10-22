@@ -7,7 +7,7 @@ services:
   mcp:
     # Governance: run the CI-published image pinned to an immutable sha tag,
     # NOT a local ad-hoc build. Update the tag by merging the next sha via PR.
-    image: ghcr.io/zeeker-sg/mcp:ad0628a295454a6a6bbef8ea0199ca137a48fc2d
+    image: ghcr.io/zeeker-sg/mcp:33225a1caa5a5cad8d9837fd82b142233883b516
     container_name: zeeker-mcp
     init: true
     environment:
