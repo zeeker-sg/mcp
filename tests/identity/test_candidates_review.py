@@ -51,6 +51,11 @@ def test_documented_parser_scope(text, expected):
         "http://www.elitigation.sg/gd/s/2099_SGHC_1",
         "https://evil.test/gd/s/2099_SGHC_1",
         "https://www.elitigation.sg/gd/s/2099_SGHC_1?unreviewed=1",
+        "https://www.elitigation.sg/gd/s/2099_SGHC_1?",
+        "https://www.elitigation.sg/gd/s/2099_SGHC_1#",
+        "https://www.elitigation.sg/gd/s/2099_SGHC_1?#",
+        "HTTPS://www.elitigation.sg/gd/s/2099_SGHC_1",
+        "https://WWW.elitigation.sg/gd/s/2099_SGHC_1",
         "https://www.elitigation.sg@evil.test/gd/s/2099_SGHC_1",
         "https://www.elitigation.sg/gd/s/2099_SGHC_\u0661",
         "https://www.elitigation.sg/gd/s/\u0662\u0660\u0669\u0669_SGHC_1",
@@ -65,7 +70,7 @@ def test_url_scope_rejects_unapproved_variants(url):
 
 
 @pytest.mark.parametrize("codepoint", [*range(0x21), 0x7F])
-def test_raw_url_controls_and_spaces_are_rejected_before_urlsplit(codepoint):
+def test_raw_url_controls_and_spaces_are_rejected_before_matching(codepoint):
     url = "https://www.elitigation.sg/gd/s/2099_SGHC_1"
     character = chr(codepoint)
     assert publisher_url_variant(character + url) is None

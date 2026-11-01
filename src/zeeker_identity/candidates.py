@@ -8,7 +8,6 @@ import json
 import re
 from collections import defaultdict
 from itertools import combinations
-from urllib.parse import urlsplit, urlunsplit
 
 from .db import canonical, now, open_registry, transaction
 from .errors import RegistryError
@@ -57,30 +56,22 @@ NORMALIZERS = {DEFAULT_REVISION: neutral_v2}
 
 def publisher_url_variant(value):
     """Only eLitigation GD neutral-citation slugs; no generic URL equivalence."""
-    # urlsplit removes TAB/CR/LF and leading C0/space before parsing. Refuse
-    # those raw inputs first; only printable, space-free ASCII URLs are in scope.
+    # Refuse raw controls before matching. Match the entire raw spelling so no
+    # parser preprocessing (including empty query/fragment removal) adds variants.
     if (
         not isinstance(value, str)
         or not value.isascii()
         or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value)
     ):
         return None
-    try:
-        parsed = urlsplit(value)
-    except ValueError:
-        return None
-    if (
-        parsed.scheme != "https"
-        or parsed.netloc not in {"elitigation.sg", "www.elitigation.sg"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        return None
-    match = re.fullmatch(r"/gd/s/([0-9]{4})_([A-Z]+(?:\([A-Z]+\))?)_([0-9]{1,6})", parsed.path)
+    match = re.fullmatch(
+        r"https://(?:www\.)?elitigation\.sg/gd/s/"
+        r"([0-9]{4})_([A-Z]+(?:\([A-Z]+\))?)_([0-9]{1,6})",
+        value,
+    )
     if not match or match[2] not in COURTS or int(match[3]) == 0:
         return None
-    path = f"/gd/s/{match[1]}_{match[2]}_{int(match[3])}"
-    return urlunsplit(("https", "www.elitigation.sg", path, "", ""))
+    return f"https://www.elitigation.sg/gd/s/{match[1]}_{match[2]}_{int(match[3])}"
 
 
 def generate_candidates(directory, snapshot_id, *, revision=DEFAULT_REVISION) -> dict:

@@ -196,8 +196,10 @@ It accepts bracketed four-ASCII-digit years, known distinct ASCII court designat
 and positive one-to-six-ASCII-digit sequence numbers. Its narrow citation variants
 are U+0020 spacing, ASCII court case, numeric zero padding and missing court/number
 spacing; original strings remain intact. Unicode digits/whitespace and controls
-are refused. URL input must be space-free printable ASCII before `urlsplit`;
-TAB/CR/LF, leading C0/space and DEL cannot be stripped into an accepted URL.
+are refused. URL input must match the entire raw ASCII spelling, using lowercase
+`https://elitigation.sg` or `https://www.elitigation.sg` and the exact GD path grammar.
+Controls, spaces, query/fragment delimiters (even empty), ports and userinfo are
+refused. No URL parser stripping or case folding adds equivalences.
 SGHC(I), SGHC(A), SGHC and SGCA(I) are never collapsed. URL proposals use only
 documented HTTPS eLitigation GD slugs with numeric padding variants; names and
 proceedings do not independently create pair proposals. PDPC currently gets
