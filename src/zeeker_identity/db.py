@@ -102,7 +102,12 @@ def transaction(connection: sqlite3.Connection):
 
 def migrate(connection: sqlite3.Connection, *, checkpoint=None) -> None:
     expected = hashlib.sha256(DDL.encode()).hexdigest()
-    tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    tables = {
+        r[0]
+        for r in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
     if tables:
         if tables != TABLES:
             raise RegistryError("unexpected registry schema")

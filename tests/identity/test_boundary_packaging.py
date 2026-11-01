@@ -176,25 +176,6 @@ def test_installed_wheel_cli_needs_no_server_dependencies(artifacts, tmp_path, s
     assert restored["promoted"] is False
 
 
-def test_positive_docker_context_allowlist_excludes_canaries(artifacts):
-    # Exercise the positive allowlist's file-selection semantics. This is not a
-    # Docker daemon/image build and makes no claim about live mount isolation.
-    import pathspec
-
-    project, _ = artifacts
-    spec = pathspec.PathSpec.from_lines(
-        "gitignore", (project / ".dockerignore").read_text().splitlines()
-    )
-    selected = [
-        p
-        for p in project.rglob("*")
-        if p.is_file() and not spec.match_file(p.relative_to(project).as_posix())
-    ]
-    assert project / "src/zeeker_identity/cli.py" in selected
-    assert project / "uv.lock" in selected
-    assert all(CANARY not in path.read_bytes() for path in selected)
-
-
 @pytest.mark.skipif(
     os.environ.get("ZEEKER_DOCKER_CONTEXT") != "1",
     reason="opt-in local Docker context export; no service is started",

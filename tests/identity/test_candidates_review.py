@@ -1,5 +1,8 @@
 import json
 import sqlite3
+import subprocess
+import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -75,6 +78,23 @@ def test_candidates_are_not_bindings_and_names_proceedings_are_context_only(regi
                 assert left["citation"] == right["citation"]
 
 
+def test_exact_synthetic_candidate_groups(registry, imported):
+    proposed = claims(registry)
+    assert Counter(claim["reason"] for claim in proposed) == {
+        "individual_review": 6,
+        "neutral_citation": 2,
+        "url_variant": 2,
+    }
+    assert {
+        json.loads(claim["evidence"])["key"]
+        for claim in proposed
+        if claim["reason"] == "url_variant"
+    } == {
+        "https://www.elitigation.sg/gd/s/2099_SGHC_1",
+        "https://www.elitigation.sg/gd/s/2099_SGHCR_2",
+    }
+
+
 def test_explicit_new_normalizer_run_preserves_decisions(registry, imported, monkeypatch):
     old_claims = claims(registry)
     decide(registry, old_claims[0]["claim_id"], verdict="defer")
@@ -97,6 +117,21 @@ def test_same_revision_definition_drift_fails_closed(registry, imported, monkeyp
 
     before = state(registry)
     monkeypatch.setattr(candidates, "COURTS", candidates.COURTS | {"SYNTHETIC"})
+    with pytest.raises(RegistryError, match="definition changed"):
+        generate_candidates(registry, imported["snapshot_id"])
+    assert state(registry) == before
+
+
+def test_url_rule_drift_is_also_bound_to_revision(registry, imported, monkeypatch):
+    import zeeker_identity.candidates as candidates
+
+    original = candidates.publisher_url_variant
+
+    def permissive_url(value):
+        return original(value.split("?")[0]) if isinstance(value, str) else None
+
+    before = state(registry)
+    monkeypatch.setattr(candidates, "publisher_url_variant", permissive_url)
     with pytest.raises(RegistryError, match="definition changed"):
         generate_candidates(registry, imported["snapshot_id"])
     assert state(registry) == before
@@ -215,6 +250,44 @@ def test_two_reviewers_race_one_wins_one_explicit_conflict(registry, imported):
             "accepted",
             "conflict",
         ]
+
+
+def test_independent_cli_processes_reject_stale_writer(registry, imported):
+    claim = claims(registry, "individual_review")[0]
+    evidence = claim_evidence(registry, claim["claim_id"])
+    command = [
+        sys.executable,
+        "-m",
+        "zeeker_identity",
+        "--registry-dir",
+        str(registry),
+        "review",
+        "--claim",
+        claim["claim_id"],
+        "--verdict",
+        "accept",
+        "--basis",
+        "synthetic cross-process race",
+        "--claim-revision",
+        "0",
+        "--expected-bindings",
+        json.dumps(evidence["expected_bindings"]),
+    ]
+    writers = [
+        subprocess.Popen(
+            [*command, "--reviewer", reviewer],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for reviewer in ("synthetic-process-one", "synthetic-process-two")
+    ]
+    results = [(writer, writer.communicate(timeout=15)) for writer in writers]
+    assert sorted(writer.returncode for writer in writers) == [0, 2]
+    assert "stale" in next(output[1] for writer, output in results if writer.returncode == 2)
+    with open_registry(registry, readonly=True) as connection:
+        assert connection.execute("SELECT count(*) FROM review_decision").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM document").fetchone()[0] == 1
 
 
 def test_raw_sql_cannot_reset_tombstone_or_replace_a_binding(registry, imported):

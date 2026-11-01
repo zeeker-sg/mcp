@@ -96,6 +96,9 @@ def generate_candidates(directory, snapshot_id, *, revision=DEFAULT_REVISION) ->
                 "implementation_digest": hashlib.sha256(
                     inspect.getsource(normalizer).encode()
                 ).hexdigest(),
+                "url_rules_digest": hashlib.sha256(
+                    inspect.getsource(publisher_url_variant).encode()
+                ).hexdigest(),
                 "scope": "evidence-only; no automatic binding",
             }
         )

@@ -83,6 +83,10 @@ Reject/defer preserve existing assignments. Revocation affects only bindings own
 by that claim, appends history and retains monotonically revised unresolved tombstones.
 Conflicting, stale and two-bound-document coalescing operations roll back atomically.
 Raw SQL writes/DDL maintenance are unsupported; schema drift is refused on open.
+SQLite's own internal statistics tables are not extra logical registry tables.
+If initialization was interrupted leaving an empty file, commands refuse it rather
+than silently initializing it. Preserve and report it; an operator must verify that
+it is empty and belongs to the failed initialization before removing/reinitializing.
 
 `report` emits deterministic inventory counts. These CLI outputs and contracts are
 private review artifacts, never CI/publication inputs for real data.
@@ -113,6 +117,8 @@ assertions, claims, decisions and bindings. Reusing a source/generation with a
 different contract fails. Interrupted imports roll back rather than leaving a
 partially registered snapshot. The importer never copies a full source DB into
 the registry and does not modify the source.
+Reimport preserves the first stored approval reference. Changing only that pointer
+does not amend the immutable manifest or record a new approval/policy event.
 
 ## Ten-table schema map
 
@@ -135,7 +141,8 @@ supported review operations also validate semantic ownership in one transaction.
 
 ## Candidate versions and limits
 
-`sg-neutral-v1` accepts bracketed four-digit years, known distinct court designators
+`sg-neutral-v1` binds citation-normalizer and URL-rule implementations. It accepts
+bracketed four-digit years, known distinct court designators
 and positive numeric sequence numbers. Its narrow variants are ASCII spacing,
 ASCII case and missing court/number spacing; original strings remain intact.
 SGHC(I), SGHC(A), SGHC and SGCA(I) are never collapsed. URL proposals use only

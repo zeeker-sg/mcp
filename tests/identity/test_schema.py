@@ -63,6 +63,18 @@ def test_empty_file_never_implicitly_initializes(tmp_path):
     assert path.stat().st_size == 0
 
 
+def test_sqlite_statistics_are_not_additional_logical_tables(registry):
+    with open_registry(registry) as connection:
+        connection.execute("ANALYZE")
+    with open_registry(registry, readonly=True) as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchone()[0]
+            == 10
+        )
+
+
 def test_migration_fault_rolls_back_every_table():
     connection = configure(sqlite3.connect(":memory:", isolation_level=None))
 
