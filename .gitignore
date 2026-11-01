@@ -51,3 +51,12 @@ soak-smoke-results/
 
 # Local-only operator documentation — never committed.
 .local/
+
+# Private registry state, including journals and backup/restore artifacts.
+# The CLI also rejects state paths inside any Git repository.
+*.db
+*.db-*
+*.sqlite*
+*-wal
+*-shm
+*-journal

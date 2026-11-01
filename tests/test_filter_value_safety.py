@@ -1,4 +1,4 @@
-"""
+r"""
 Hostile-input canary corpus — Slice A (Plan 03-02, D3-09 / INJ-05 / QUERY-09).
 
 Drives the 5-canary minimum corpus through query_table for two distinct
