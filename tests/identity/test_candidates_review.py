@@ -10,7 +10,7 @@ import pytest
 from zeeker_identity.candidates import (
     NORMALIZERS,
     generate_candidates,
-    neutral_v1,
+    neutral_v2,
     publisher_url_variant,
 )
 from zeeker_identity.db import open_registry
@@ -33,11 +33,16 @@ from .conftest import claims, decide, state
         ("[2099] UNKNOWN 1", None),
         ("[2099] SGHC 0", None),
         ("[2099]\u00a0SGHC 1", None),
+        ("[2099] SGHC \u0661", None),
+        ("[\u0662\u0660\u0669\u0669] SGHC 1", None),
+        ("[2099] SGHC \uff11", None),
+        ("[2099]\tSGHC 1", None),
+        ("[2099] SGHC 1\n", None),
         (None, None),
     ],
 )
 def test_documented_parser_scope(text, expected):
-    assert neutral_v1(text) == expected
+    assert neutral_v2(text) == expected
 
 
 @pytest.mark.parametrize(
@@ -47,10 +52,73 @@ def test_documented_parser_scope(text, expected):
         "https://evil.test/gd/s/2099_SGHC_1",
         "https://www.elitigation.sg/gd/s/2099_SGHC_1?unreviewed=1",
         "https://www.elitigation.sg@evil.test/gd/s/2099_SGHC_1",
+        "https://www.elitigation.sg/gd/s/2099_SGHC_\u0661",
+        "https://www.elitigation.sg/gd/s/\u0662\u0660\u0669\u0669_SGHC_1",
+        "https://www.elitigation.sg/gd/s/2099_SGHC_\uff11",
+        "https://www.elitigation.sg/gd/s/2099_SGHC_1\u00a0",
+        "https://www.eliti\tgation.sg/gd/s/2099_SGHC_1",
+        "https://www.elitigation.sg/gd/s/2099_SG\nHC_1",
     ],
 )
 def test_url_scope_rejects_unapproved_variants(url):
     assert publisher_url_variant(url) is None
+
+
+@pytest.mark.parametrize("codepoint", [*range(0x21), 0x7F])
+def test_raw_url_controls_and_spaces_are_rejected_before_urlsplit(codepoint):
+    url = "https://www.elitigation.sg/gd/s/2099_SGHC_1"
+    character = chr(codepoint)
+    assert publisher_url_variant(character + url) is None
+    assert publisher_url_variant(url.replace("SGHC", "SG" + character + "HC")) is None
+
+
+def test_unapproved_variants_preserve_original_unbound_metadata(registry, tmp_path):
+    from zeeker_identity.candidates import DEFAULT_REVISION
+    from zeeker_identity.importer import import_snapshot, source_manifest
+
+    source = tmp_path / "raw-variants.sqlite3"
+    original = [
+        ("valid", "[2099] SGHC 1", "https://www.elitigation.sg/gd/s/2099_SGHC_1"),
+        ("raw", "[2099] SGHC \u0661", "\nhttps://www.elitigation.sg/gd/s/2099_SGHC_1"),
+    ]
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE judgments(id TEXT,citation TEXT,source_url TEXT)")
+        connection.executemany("INSERT INTO judgments VALUES (?,?,?)", original)
+    contract = source_manifest(
+        source,
+        source_id="synthetic-raw",
+        generation="1",
+        corpus="judgments",
+        table="judgments",
+        columns=["id", "citation", "source_url"],
+    )
+    contract["approval_reference"] = "synthetic-only"
+    snapshot = import_snapshot(registry, source, contract)
+    result = generate_candidates(registry, snapshot["snapshot_id"])
+    assert result["normalizer_revision"] == DEFAULT_REVISION == "sg-neutral-v2"
+    assert Counter(c["reason"] for c in claims(registry)) == {"individual_review": 2}
+    with open_registry(registry, readonly=True) as connection:
+        preserved = [
+            json.loads(r[0])
+            for r in connection.execute(
+                "SELECT metadata FROM legacy_row_assertion ORDER BY locator"
+            )
+        ]
+        assert [
+            tuple(row[k] for k in ("id", "citation", "source_url")) for row in preserved
+        ] == original
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM effective_assertion_binding "
+                "WHERE document_id IS NULL AND revision=0"
+            ).fetchone()[0]
+            == 2
+        )
+        assert connection.execute("SELECT count(*) FROM document").fetchone()[0] == 0
+    before = state(registry)
+    with pytest.raises(RegistryError, match="unknown normalizer"):
+        generate_candidates(registry, snapshot["snapshot_id"], revision="sg-neutral-v1")
+    assert state(registry) == before
 
 
 def test_candidates_are_not_bindings_and_names_proceedings_are_context_only(registry, imported):
@@ -102,7 +170,7 @@ def test_explicit_new_normalizer_run_preserves_decisions(registry, imported, mon
         decisions = [tuple(r) for r in connection.execute("SELECT * FROM review_decision")]
     # A future implementation revision is simulated here. Operators cannot invent
     # revisions through the CLI: unknown normalizer names are rejected.
-    monkeypatch.setitem(NORMALIZERS, "synthetic-future-v2", neutral_v1)
+    monkeypatch.setitem(NORMALIZERS, "synthetic-future-v2", neutral_v2)
     result = generate_candidates(registry, imported["snapshot_id"], revision="synthetic-future-v2")
     assert result["created"] == len(old_claims)
     with open_registry(registry, readonly=True) as connection:
@@ -300,6 +368,37 @@ def test_raw_sql_cannot_reset_tombstone_or_replace_a_binding(registry, imported)
                 "last_decision_id=NULL WHERE assertion_id=?",
                 (claim["assertion_a"],),
             )
+
+
+def test_raw_replacement_attempt_cannot_make_a_stale_competing_acceptance_current(
+    registry, imported
+):
+    pair = claims(registry, "neutral_citation")[0]
+    delayed = claim_evidence(registry, pair["claim_id"])
+    single = next(
+        c for c in claims(registry, "individual_review") if c["assertion_a"] == pair["assertion_a"]
+    )
+    decide(registry, single["claim_id"])
+    before = state(registry)
+    with sqlite3.connect(registry / "registry.sqlite3") as raw:
+        raw.execute("PRAGMA foreign_keys=ON")
+        raw.execute("PRAGMA recursive_triggers=OFF")
+        with pytest.raises(sqlite3.IntegrityError):
+            raw.execute(
+                "INSERT OR REPLACE INTO effective_assertion_binding VALUES (?,?,?,NULL,0,NULL)",
+                (single["assertion_a"], single["corpus"], single["kind"]),
+            )
+    with pytest.raises(Conflict, match="binding revision"):
+        adjudicate(
+            registry,
+            pair["claim_id"],
+            verdict="accept",
+            reviewer="delayed",
+            basis="synthetic",
+            expected_claim_revision=0,
+            expected_bindings=delayed["expected_bindings"],
+        )
+    assert state(registry) == before
 
 
 def test_stale_claim_and_missing_binding_map_do_not_append_history(registry, imported):

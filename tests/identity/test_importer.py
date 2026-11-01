@@ -66,9 +66,14 @@ def test_new_snapshot_never_carries_rowid_bindings(registry, source, contract, i
         {"approval_reference": None},
         {"columns": ["id", "content_text"]},
         {"corpus": []},
-        {"file_digest": "0" * 64},
+        {"selected_input_digest": "0" * 64},
         {"schema_digest": "0" * 64},
         {"metadata_digest": "0" * 64},
+        {"file_digest": "0" * 64},
+        {"canonicalization_revision": "invented"},
+        {"allowlist_revision": "invented"},
+        {"allowed_columns": ["id", "content_text"]},
+        {"contract_version": 1},
         {"generation": ""},
         {"layout": "pk-v1"},
         {"row_count": True},
@@ -192,3 +197,90 @@ def test_virtual_word_in_ordinary_column_is_not_a_virtual_table(source):
         columns=COLUMNS,
     )
     assert proposed["row_count"] == 6
+
+
+def test_selected_input_digest_does_not_claim_whole_file_provenance(registry, source, contract):
+    from zeeker_identity.db import digest_file
+
+    before = digest_file(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute("UPDATE judgments SET content_text='DIFFERENT_UNSELECTED_BODY'")
+    assert digest_file(source) != before
+    proposed = source_manifest(
+        source,
+        source_id=contract["source_id"],
+        generation=contract["generation"],
+        corpus="judgments",
+        table="judgments",
+        columns=COLUMNS,
+    )
+    assert proposed["selected_input_digest"] == contract["selected_input_digest"]
+    assert "file_digest" not in proposed
+    assert proposed["contract_version"] == 2
+    assert proposed["canonicalization_revision"] == "selected-input-json-v2"
+    assert proposed["allowlist_revision"] == "metadata-allowlist-v1"
+    assert import_snapshot(registry, source, contract)["imported"] == 6
+    assert b"DIFFERENT_UNSELECTED_BODY" not in (registry / "registry.sqlite3").read_bytes()
+
+
+def test_parent_directory_aba_cannot_pair_approved_a_digest_with_b_rows(
+    registry, tmp_path, monkeypatch
+):
+    import zeeker_identity.importer as importer
+    from zeeker_identity.db import digest_file
+
+    live, other, parked = (tmp_path / name for name in ("live", "other", "parked"))
+    live.mkdir()
+    other.mkdir()
+    a, b = live / "source.sqlite3", other / "source.sqlite3"
+    for path, label in ((a, "A"), (b, "B")):
+        with sqlite3.connect(path) as connection:
+            connection.execute("CREATE TABLE judgments(id TEXT,citation TEXT,content_text TEXT)")
+            connection.execute(
+                "INSERT INTO judgments VALUES (?,?,?)",
+                (label, "[2099] SGHC 1", "PRIVATE_SOURCE_BODY_CANARY"),
+            )
+    options = dict(
+        source_id="synthetic-aba",
+        generation="1",
+        corpus="judgments",
+        table="judgments",
+        columns=["id", "citation"],
+    )
+    approved_a = source_manifest(a, **options)
+    approved_a["approval_reference"] = "synthetic-prior-approval-of-A"
+    honest_b = source_manifest(b, **options)
+    assert approved_a["selected_input_digest"] != honest_b["selected_input_digest"]
+    original_a = digest_file(a)
+    genuine_connect = sqlite3.connect
+    interceptions = []
+
+    def aba_connect(database, *args, **kwargs):
+        if database == a.as_uri() + "?mode=ro":
+            # Real filesystem ABA and real SQLite handle, not fabricated SQL rows.
+            # SQLite opens B; A is restored before the importer can inspect paths.
+            live.rename(parked)
+            other.rename(live)
+            try:
+                connection = genuine_connect(database, *args, **kwargs)
+            finally:
+                live.rename(other)
+                parked.rename(live)
+            interceptions.append(True)
+            return connection
+        return genuine_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(importer.sqlite3, "connect", aba_connect)
+    before = state(registry)
+    with pytest.raises(RegistryError, match="pinned import contract"):
+        import_snapshot(registry, a, approved_a)
+    assert state(registry) == before
+    acquired = source_manifest(a, **options)
+    assert acquired["selected_input_digest"] == honest_b["selected_input_digest"]
+    assert acquired["metadata_digest"] == honest_b["metadata_digest"]
+    assert acquired["approval_reference"] is None
+    assert "file_digest" not in acquired
+    assert len(interceptions) == 2
+    assert digest_file(a) == original_a
+    assert b"PRIVATE_SOURCE_BODY_CANARY" not in (registry / "registry.sqlite3").read_bytes()
+    assert sorted(path.name for path in registry.iterdir()) == ["registry.sqlite3"]

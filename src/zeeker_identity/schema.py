@@ -1,6 +1,6 @@
 """Increment A's ten logical tables; no content, public IDs or evidence receipts."""
 
-VERSION = "1"
+VERSION = "2"
 TABLES = frozenset(
     {
         "schema_migration",
@@ -44,7 +44,7 @@ CREATE TABLE legacy_snapshot (
     source_id TEXT NOT NULL,
     source_table TEXT NOT NULL,
     generation TEXT NOT NULL,
-    file_digest TEXT NOT NULL,
+    selected_input_digest TEXT NOT NULL,
     schema_digest TEXT NOT NULL,
     metadata_digest TEXT NOT NULL,
     manifest TEXT NOT NULL CHECK (json_valid(manifest)),
@@ -225,5 +225,34 @@ for _table in ("identity_claim", "effective_assertion_binding"):
     DDL += f"""
 CREATE TRIGGER retain_{_table} BEFORE DELETE ON {_table} BEGIN
     SELECT RAISE(ABORT, 'history and binding tombstones must be retained');
+END;
+"""
+
+# REPLACE's implicit delete does not fire DELETE triggers when recursive_triggers
+# is disabled. Reject every existing UNIQUE key before SQLite can delete a row;
+# these guards also protect alternate raw connections with recursive_triggers OFF.
+_INSERT_KEYS = {
+    "schema_migration": (("version",),),
+    "corpus_allowed_kinds": (("corpus", "kind"),),
+    "alias_namespace": (("namespace_id",),),
+    "legacy_snapshot": (
+        ("snapshot_id",),
+        ("corpus", "kind", "source_id", "source_table", "generation"),
+    ),
+    "source_resource": (("resource_id",),),
+    "legacy_row_assertion": (("assertion_id",), ("snapshot_id", "locator")),
+    "document": (("document_id",),),
+    "identity_claim": (("claim_id",),),
+    "review_decision": (("decision_id",), ("claim_id", "claim_revision")),
+    "effective_assertion_binding": (("assertion_id",),),
+}
+for _table, _keys in sorted(_INSERT_KEYS.items()):
+    _conflict = " OR ".join(
+        "(" + " AND ".join(f'"{column}" = NEW."{column}"' for column in key) + ")" for key in _keys
+    )
+    DDL += f"""
+CREATE TRIGGER retain_{_table}_insert BEFORE INSERT ON {_table}
+WHEN EXISTS (SELECT 1 FROM {_table} WHERE {_conflict}) BEGIN
+    SELECT RAISE(ABORT, 'existing registry keys cannot be replaced');
 END;
 """

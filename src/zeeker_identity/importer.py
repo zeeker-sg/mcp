@@ -1,4 +1,4 @@
-"""Pinned metadata-only import from an explicitly selected, frozen source layout."""
+"""Pin selected metadata from one SQLite snapshot; never claim whole-file provenance."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from .db import canonical, digest_file, now, open_registry, transaction
+from .db import canonical, now, open_registry, transaction
 from .errors import Conflict, RegistryError
 
 KINDS = {"judgments": "judgment", "pdpc": "enforcement_decision"}
@@ -43,6 +43,8 @@ ALLOWED_COLUMNS = {
         }
     ),
 }
+CANONICALIZATION_REVISION = "selected-input-json-v2"
+ALLOWLIST_REVISION = "metadata-allowlist-v1"
 CONTRACT_KEYS = frozenset(
     {
         "contract_version",
@@ -54,7 +56,10 @@ CONTRACT_KEYS = frozenset(
         "columns",
         "layout",
         "journal_mode",
-        "file_digest",
+        "canonicalization_revision",
+        "allowlist_revision",
+        "allowed_columns",
+        "selected_input_digest",
         "schema_digest",
         "metadata_digest",
         "row_count",
@@ -93,17 +98,15 @@ def _scan(source, corpus, table, columns):
     if raw.is_symlink() or not raw.is_file():
         raise RegistryError("source must be a frozen regular file, not a symbolic link")
     path = raw.resolve()
-    before = path.stat()
     if any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
         raise RegistryError("source sidecars require a separately acquired consistent fixture")
-    with path.open("rb") as stream:
-        header = stream.read(20)
-    if header[:16] != b"SQLite format 3\x00" or header[18:20] != b"\x01\x01":
-        raise RegistryError("only frozen rollback-journal SQLite sources are supported")
-    file_digest = digest_file(path)
+    # No pathname hash is paired with this connection: a directory ABA can make
+    # those refer to different files. Schema, journal mode and rows below all come
+    # from this same SQLite read transaction and define the selected input.
     connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, isolation_level=None)
     try:
         connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA temp_store=MEMORY")
         connection.execute("BEGIN")
         table_row = connection.execute(
             "SELECT type, sql FROM sqlite_master WHERE name=?", (table,)
@@ -145,32 +148,29 @@ def _scan(source, corpus, table, columns):
             metadata = dict(zip(columns, values, strict=True))
             metadata_hash.update((canonical([row[0], metadata]) + "\n").encode())
             rows.append((str(row[0]), metadata))
-        # Verify the read itself as well as the file. Input is required to stay
-        # frozen; a caller cannot label a changing read using an advisory build ID.
-        final_digest = digest_file(path)
-        after = path.stat()
-        if final_digest != file_digest or (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-            raise RegistryError("source changed while it was being inspected")
-    finally:
-        connection.close()
-    return (
-        {
+        selected_input = {
+            "canonicalization_revision": CANONICALIZATION_REVISION,
+            "allowlist_revision": ALLOWLIST_REVISION,
+            "allowed_columns": sorted(ALLOWED_COLUMNS[corpus]),
+            "corpus": corpus,
+            "kind": KINDS[corpus],
+            "table": table,
             "columns": columns,
             "layout": "pkless-rowid-v1",
             "journal_mode": journal,
-            "file_digest": file_digest,
             "schema_digest": schema_digest,
             "metadata_digest": metadata_hash.hexdigest(),
             "row_count": len(rows),
-        },
-        rows,
-    )
+        }
+        # canonical() sorts object keys, emits compact UTF-8 JSON, preserves JSON
+        # scalar types, and rejects NaN/Infinity. Rows retain ascending rowid order
+        # and string locators exactly as subsequently stored in the registry.
+        selected_digest = hashlib.sha256(
+            canonical({**selected_input, "rows": rows}).encode("utf-8")
+        ).hexdigest()
+    finally:
+        connection.close()
+    return {**selected_input, "selected_input_digest": selected_digest}, rows
 
 
 def source_manifest(source, *, source_id, generation, corpus, table, columns) -> dict:
@@ -179,7 +179,7 @@ def source_manifest(source, *, source_id, generation, corpus, table, columns) ->
     _text(generation, "generation")
     result, _ = _scan(source, corpus, table, columns)
     return {
-        "contract_version": 1,
+        "contract_version": 2,
         "source_id": source_id,
         "generation": generation,
         "corpus": corpus,
@@ -194,18 +194,21 @@ def validate_contract(contract: dict) -> dict:
     if not isinstance(contract, dict) or set(contract) != CONTRACT_KEYS:
         raise RegistryError("import contract has missing or unknown fields")
     if (
-        contract["contract_version"] != 1
+        contract["contract_version"] != 2
         or type(contract["contract_version"]) is not int
         or not isinstance(contract["corpus"], str)
         or contract["corpus"] not in KINDS
         or contract["kind"] != KINDS[contract["corpus"]]
         or contract["layout"] != "pkless-rowid-v1"
         or contract["journal_mode"] != "delete"
+        or contract["canonicalization_revision"] != CANONICALIZATION_REVISION
+        or contract["allowlist_revision"] != ALLOWLIST_REVISION
+        or contract["allowed_columns"] != sorted(ALLOWED_COLUMNS[contract["corpus"]])
     ):
         raise RegistryError("unsupported import contract")
     for name in ("source_id", "generation", "approval_reference"):
         _text(contract[name], name)
-    for name in ("file_digest", "schema_digest", "metadata_digest"):
+    for name in ("selected_input_digest", "schema_digest", "metadata_digest"):
         if not isinstance(contract[name], str) or not re.fullmatch(r"[0-9a-f]{64}", contract[name]):
             raise RegistryError("contract digests must be lowercase SHA-256")
     if type(contract["row_count"]) is not int or contract["row_count"] < 0:
@@ -242,7 +245,7 @@ def import_snapshot(directory, source, contract, *, checkpoint=None) -> dict:
                 contract["source_id"],
                 contract["table"],
                 contract["generation"],
-                contract["file_digest"],
+                contract["selected_input_digest"],
                 contract["schema_digest"],
                 contract["metadata_digest"],
                 canonical(contract),
@@ -275,8 +278,17 @@ def import_snapshot(directory, source, contract, *, checkpoint=None) -> dict:
                 assertion_id if url is None else None,
             )
             connection.execute(
-                "INSERT OR IGNORE INTO source_resource VALUES (?,?,?,?,?,?)",
-                (resource_id, corpus, kind, contract["source_id"], url, representation),
+                "INSERT INTO source_resource SELECT ?,?,?,?,?,? "
+                "WHERE NOT EXISTS (SELECT 1 FROM source_resource WHERE resource_id=?)",
+                (
+                    resource_id,
+                    corpus,
+                    kind,
+                    contract["source_id"],
+                    url,
+                    representation,
+                    resource_id,
+                ),
             )
             connection.execute(
                 "INSERT INTO legacy_row_assertion VALUES (?,?,?,?,?,?,?)",

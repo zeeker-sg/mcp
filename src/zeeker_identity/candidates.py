@@ -34,15 +34,15 @@ COURTS = frozenset(
         "SGAD",
     }
 )
-DEFAULT_REVISION = "sg-neutral-v1"
+DEFAULT_REVISION = "sg-neutral-v2"
 MAX_PAIR_PROPOSALS = 10_000
 
 
-def neutral_v1(value):
+def neutral_v2(value):
     """Only ASCII spacing/case variants and the documented missing-space form."""
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not value.isascii():
         return None
-    match = re.fullmatch(r" *\[(\d{4})\] *([A-Za-z]+(?:\([A-Za-z]+\))?) *(\d{1,6}) *", value)
+    match = re.fullmatch(r" *\[([0-9]{4})\] *([A-Za-z]+(?:\([A-Za-z]+\))?) *([0-9]{1,6}) *", value)
     if not match:
         return None
     year, court, number = match.groups()
@@ -52,12 +52,18 @@ def neutral_v1(value):
     return f"[{year}] {court} {int(number)}"
 
 
-NORMALIZERS = {DEFAULT_REVISION: neutral_v1}
+NORMALIZERS = {DEFAULT_REVISION: neutral_v2}
 
 
 def publisher_url_variant(value):
     """Only eLitigation GD neutral-citation slugs; no generic URL equivalence."""
-    if not isinstance(value, str):
+    # urlsplit removes TAB/CR/LF and leading C0/space before parsing. Refuse
+    # those raw inputs first; only printable, space-free ASCII URLs are in scope.
+    if (
+        not isinstance(value, str)
+        or not value.isascii()
+        or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value)
+    ):
         return None
     try:
         parsed = urlsplit(value)
@@ -70,7 +76,7 @@ def publisher_url_variant(value):
         or parsed.fragment
     ):
         return None
-    match = re.fullmatch(r"/gd/s/(\d{4})_([A-Z]+(?:\([A-Z]+\))?)_(\d{1,6})", parsed.path)
+    match = re.fullmatch(r"/gd/s/([0-9]{4})_([A-Z]+(?:\([A-Z]+\))?)_([0-9]{1,6})", parsed.path)
     if not match or match[2] not in COURTS or int(match[3]) == 0:
         return None
     path = f"/gd/s/{match[1]}_{match[2]}_{int(match[3])}"
@@ -107,10 +113,11 @@ def generate_candidates(directory, snapshot_id, *, revision=DEFAULT_REVISION) ->
         ).fetchone()
         if previous and previous[0] != definition:
             raise RegistryError("normalizer definition changed; use an explicit new revision")
-        connection.execute(
-            "INSERT OR IGNORE INTO alias_namespace VALUES (?,?,?,?,?)",
-            (namespace_id, corpus, kind, revision, definition),
-        )
+        if previous is None:
+            connection.execute(
+                "INSERT INTO alias_namespace VALUES (?,?,?,?,?)",
+                (namespace_id, corpus, kind, revision, definition),
+            )
         rows = connection.execute(
             "SELECT assertion_id, metadata FROM legacy_row_assertion WHERE snapshot_id=? "
             "ORDER BY assertion_id",
@@ -143,7 +150,8 @@ def generate_candidates(directory, snapshot_id, *, revision=DEFAULT_REVISION) ->
         for left, right, reason, evidence in proposals:
             claim_id = stable_id("claim", namespace_id, left, right, reason, evidence)
             result = connection.execute(
-                "INSERT OR IGNORE INTO identity_claim VALUES (?,?,?,?,?,?,?,?,0,?)",
+                "INSERT INTO identity_claim SELECT ?,?,?,?,?,?,?,?,0,? "
+                "WHERE NOT EXISTS (SELECT 1 FROM identity_claim WHERE claim_id=?)",
                 (
                     claim_id,
                     corpus,
@@ -154,6 +162,7 @@ def generate_candidates(directory, snapshot_id, *, revision=DEFAULT_REVISION) ->
                     reason,
                     canonical(evidence),
                     now(),
+                    claim_id,
                 ),
             )
             inserted += result.rowcount

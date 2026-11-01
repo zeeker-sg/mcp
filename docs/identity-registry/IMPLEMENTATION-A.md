@@ -83,6 +83,11 @@ Reject/defer preserve existing assignments. Revocation affects only bindings own
 by that claim, appends history and retains monotonically revised unresolved tombstones.
 Conflicting, stale and two-bound-document coalescing operations roll back atomically.
 Raw SQL writes/DDL maintenance are unsupported; schema drift is refused on open.
+Schema revision 2 refuses revision 1 files and does not upgrade or relabel their
+old provenance automatically. Preserve old files/history for review. Synthetic
+revision 2 evaluation uses a new dedicated private directory; migration of prior
+state requires a separate reviewed design. No existing registry was migrated as
+part of this implementation repair.
 SQLite's own internal statistics tables are not extra logical registry tables.
 If initialization was interrupted leaving an empty file, commands refuse it rather
 than silently initializing it. Preserve and report it; an operator must verify that
@@ -104,12 +109,52 @@ The PDPC menu contains only ID/title/organisation/decision/date/URL metadata; th
 actual subset and source spelling still require operator approval. Bodies, caches,
 summaries, fragments and extraction receipts cannot be selected.
 
-An import contract pins logical source ID, generation label, corpus/kind, table,
-selected columns, layout, rollback journal mode, file/schema/selected-metadata SHA-256,
-row count and approval reference. Generation is an operator label tied to the
-pinned bytes, not a publisher-version observation. Advisory native build IDs alone
-cannot identify the bytes read. WAL/sidecar inputs require separately authorized
-consistent acquisition; this CLI refuses them instead of copying a live source.
+Contract version 2 pins logical source ID, generation label, corpus/kind, table,
+selected columns, the complete fixed metadata allowlist and its revision, locator
+layout, rollback journal mode, schema digest, metadata digest, selected-input digest,
+row count, canonicalization revision and approval reference. Generation/source IDs
+are operator labels, not publisher-version observations or custody proof.
+
+**Explicit provenance revision (synthetic development, 1 November 2026):** the
+selected-input digest is SHA-256 of canonical selected metadata read in one SQLite
+read transaction. It is **not an original whole-source-file digest**. The prior
+contract paired a separate pathname checksum with SQL reads; parent-directory ABA
+could make those refer to different files. Version 2 removes `file_digest`, rejects
+version 1 contracts, and renames the registry column to `selected_input_digest`.
+It makes no whole-file assertion about old artifacts. The project lead approved
+this bounded development change; real fixture/custody approval and independent
+final acceptance remain open. Requirements that need whole-file identity still
+need a separately reviewed acquisition design.
+
+The `selected-input-json-v2` canonical payload contains corpus/kind/table, sorted
+selected columns, sorted complete allowed columns, `metadata-allowlist-v1`, locator
+layout, journal mode, schema digest, metadata digest, row count, and rows in ascending
+rowid order as `[string_locator, metadata_object]`. Canonical JSON uses sorted object
+keys, compact separators, UTF-8 without ASCII escaping, JSON scalar types and no
+NaN/Infinity or Unicode normalization. The schema digest hashes canonical
+`[CREATE_TABLE_SQL, PRAGMA_table_info_rows]`; the metadata digest hashes each
+`[integer_rowid, metadata_object]` plus LF in ascending rowid order. Hashes are computed
+from the same connection/transaction as the rows subsequently imported. Candidate
+normalization happens later and records its distinct revision, court allowlist and
+implementation/URL-rule digests in the immutable alias namespace; it is not source
+metadata preprocessing.
+
+Pinning is deliberately a two-stage operator process: acquire and independently
+review a proposed manifest against the trusted selected fixture and approved scope;
+retain that manifest and the approval record before import. Import reads the selected
+input again and checks **every** acquisition field, including the approved
+selected-input digest, before opening a registry write transaction. A mismatch
+aborts without writes; import never regenerates a manifest or approves the current
+path contents. Merely running `source-manifest` on the current path and filling in
+an approval pointer does not establish trust, custody or legal rights. If acquisition
+itself encounters substitution, its digest honestly describes the selected rows
+actually read, not an earlier file at that path; independent operator review is
+what authorizes that input. Metadata-equal replacements and changes only to unselected
+bodies are outside this digest's claim and do not prove whole-file equality.
+
+WAL/sidecar inputs require separately authorized consistent acquisition; this CLI
+refuses them instead of copying a live source. No source bodies or full databases
+are copied into registry state, build artifacts or an acquisition cache.
 
 All selected values and duplicate rows survive exactly; snapshot-local rowids are
 never reused as durable identities across generations. Reimport is a no-op for
@@ -127,7 +172,7 @@ does not amend the immutable manifest or record a new approval/policy event.
 | `schema_migration` | Version and DDL digest; actual schema objects are compared on open |
 | `corpus_allowed_kinds` | Explicit corpus/kind pairs |
 | `alias_namespace` | Corpus/kind, normalizer revision and immutable implementation/namespace definition |
-| `legacy_snapshot` | Logical source/table/generation, file/schema/metadata digests, manifest and import time |
+| `legacy_snapshot` | Logical source/table/generation, selected-input/schema/metadata digests, manifest and import time |
 | `source_resource` | Exact original/representation URLs and source ownership; never legal identity |
 | `legacy_row_assertion` | One snapshot-local locator and exact selected metadata per row; composite ownership FKs |
 | `document` | Random opaque private identity, corpus/kind and creation time; no public ID |
@@ -135,16 +180,24 @@ does not amend the immutable manifest or record a new approval/policy event.
 | `review_decision` | Append-only verdict/reviewer/basis, expected revisions, selected target and time |
 | `effective_assertion_binding` | Assertion-global assignment/tombstone, monotonic revision and last decision |
 
-All key components are explicitly NOT NULL; connections verify foreign keys.
+All key components are explicitly NOT NULL; supported connections and transactions
+verify foreign keys and recursive triggers. BEFORE INSERT guards reject existing
+primary and alternate unique keys on every logical table, independently of recursive
+triggers, preventing REPLACE's implicit-delete bypass on alternate connections.
+Supported idempotent operations select existing keys instead of relying on OR IGNORE.
 Immutable history/schema objects and audited transitions have database backstops;
 supported review operations also validate semantic ownership in one transaction.
 
 ## Candidate versions and limits
 
-`sg-neutral-v1` binds citation-normalizer and URL-rule implementations. It accepts
-bracketed four-digit years, known distinct court designators
-and positive numeric sequence numbers. Its narrow variants are ASCII spacing,
-ASCII case and missing court/number spacing; original strings remain intact.
+`sg-neutral-v2` binds citation-normalizer and URL-rule implementations. Revision 1
+is no longer executable; existing artifacts are not reinterpreted as revision 2.
+It accepts bracketed four-ASCII-digit years, known distinct ASCII court designators
+and positive one-to-six-ASCII-digit sequence numbers. Its narrow citation variants
+are U+0020 spacing, ASCII court case, numeric zero padding and missing court/number
+spacing; original strings remain intact. Unicode digits/whitespace and controls
+are refused. URL input must be space-free printable ASCII before `urlsplit`;
+TAB/CR/LF, leading C0/space and DEL cannot be stripped into an accepted URL.
 SGHC(I), SGHC(A), SGHC and SGCA(I) are never collapsed. URL proposals use only
 documented HTTPS eLitigation GD slugs with numeric padding variants; names and
 proceedings do not independently create pair proposals. PDPC currently gets

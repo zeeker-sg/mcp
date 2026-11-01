@@ -78,6 +78,9 @@ def configure(connection: sqlite3.Connection, *, readonly: bool = False) -> sqli
     connection.execute("PRAGMA foreign_keys=ON")
     if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
         raise RegistryError("foreign-key enforcement is required")
+    connection.execute("PRAGMA recursive_triggers=ON")
+    if connection.execute("PRAGMA recursive_triggers").fetchone()[0] != 1:
+        raise RegistryError("recursive-trigger enforcement is required")
     connection.execute("PRAGMA busy_timeout=5000")
     connection.execute("PRAGMA temp_store=MEMORY")
     if readonly:
@@ -91,6 +94,8 @@ def transaction(connection: sqlite3.Connection):
         raise RegistryError("nested transactions are not supported")
     if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
         raise RegistryError("foreign-key enforcement was disabled")
+    if connection.execute("PRAGMA recursive_triggers").fetchone()[0] != 1:
+        raise RegistryError("recursive-trigger enforcement was disabled")
     connection.execute("BEGIN IMMEDIATE")
     try:
         yield
@@ -113,7 +118,9 @@ def migrate(connection: sqlite3.Connection, *, checkpoint=None) -> None:
             raise RegistryError("unexpected registry schema")
         rows = connection.execute("SELECT version, digest FROM schema_migration").fetchall()
         if [tuple(r) for r in rows] != [(VERSION, expected)]:
-            raise RegistryError("unknown migration version or digest")
+            raise RegistryError(
+                "unknown migration version or digest; no automatic upgrade is supported"
+            )
         if schema_signature(connection) != expected_schema_signature():
             raise RegistryError("registry schema objects differ from the migration")
         if connection.execute("PRAGMA foreign_key_check").fetchone():
