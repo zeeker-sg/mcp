@@ -47,7 +47,7 @@ async def test_tools_list_flat_schema(mcp_client):
     list_db = next((t for t in tools if t.name == "list_databases"), None)
     assert list_db is not None, "list_databases tool not found"
 
-    schema = list_db.inputSchema
+    schema = list_db.input_schema
     assert schema["type"] == "object", f"Expected type='object', got {schema.get('type')!r}"
     assert "anyOf" not in schema, f"anyOf present in top-level schema: {schema}"
     assert "oneOf" not in schema, f"oneOf present in top-level schema: {schema}"
@@ -62,9 +62,9 @@ async def test_tool_annotations(mcp_client):
 
     ann = list_db.annotations
     assert ann is not None, "list_databases has no annotations"
-    assert ann.readOnlyHint is True, f"readOnlyHint is not True: {ann}"
-    assert ann.idempotentHint is True, f"idempotentHint is not True: {ann}"
-    assert ann.openWorldHint is True, f"openWorldHint is not True: {ann}"
+    assert ann.read_only_hint is True, f"readOnlyHint is not True: {ann}"
+    assert ann.idempotent_hint is True, f"idempotentHint is not True: {ann}"
+    assert ann.open_world_hint is True, f"openWorldHint is not True: {ann}"
 
 
 @pytest.mark.httpx_mock(assert_all_responses_were_requested=True)

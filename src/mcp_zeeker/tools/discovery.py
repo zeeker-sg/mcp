@@ -17,7 +17,7 @@ import asyncio
 from typing import Annotated
 
 import structlog
-from fastmcp.tools.tool import ToolAnnotations
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from mcp_zeeker import config
@@ -109,9 +109,9 @@ def _supports_fragments(database: str, table: str) -> bool:
     name="list_databases",
     description=_DESCRIPTION,
     annotations=ToolAnnotations(
-        readOnlyHint=True,
-        idempotentHint=True,
-        openWorldHint=True,
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=True,
     ),
 )
 async def list_databases() -> Envelope:
@@ -167,9 +167,9 @@ async def list_databases() -> Envelope:
     name="list_tables",
     description=_LIST_TABLES_DESCRIPTION,
     annotations=ToolAnnotations(
-        readOnlyHint=True,
-        idempotentHint=True,
-        openWorldHint=True,
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=True,
     ),
 )
 async def list_tables(
@@ -204,9 +204,9 @@ async def list_tables(
     name="describe_table",
     description=_DESCRIBE_TABLE_DESCRIPTION,
     annotations=ToolAnnotations(
-        readOnlyHint=True,
-        idempotentHint=True,
-        openWorldHint=True,
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=True,
     ),
 )
 async def describe_table(
