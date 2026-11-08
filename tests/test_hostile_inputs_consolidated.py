@@ -1,4 +1,4 @@
-"""
+r"""
 Consolidated hostile-inputs tests — Phase 6 Plan 06-03 GREEN body.
 
 5 canaries × 3 tools (query_table, search, fetch) = 15 parametrized cases.
