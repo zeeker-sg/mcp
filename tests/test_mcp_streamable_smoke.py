@@ -3,7 +3,7 @@ Uvicorn random-port smoke tests — Pattern C.
 
 Tests the real streamable HTTP transport path (the in-memory Pattern B tests skip
 all ASGI/HTTP serialization). A live uvicorn server is spawned on a free random port,
-then tested via the MCP streamablehttp_client.
+then tested via the MCP streamable_http_client.
 
 Tests:
 - TRANSPORT-01/02: initialize handshake completes over real HTTP wire.
@@ -23,21 +23,21 @@ test_transport_stateless_session.py can share it without cross-file imports.
 from __future__ import annotations
 
 from mcp.client.session import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 
 async def test_streamable_http_handshake_and_list_tools(live_server):
     """TRANSPORT-01/02: initialize handshake completes over real HTTP; tools/list works.
 
-    Uses the mcp.client.streamable_http.streamablehttp_client to connect to the
+    Uses the mcp.client.streamable_http.streamable_http_client to connect to the
     live uvicorn server. Asserts that initialize returns a non-empty serverInfo.name
     and that tools/list includes list_databases.
     """
-    async with streamablehttp_client(live_server) as (read, write, _get_session_id):
+    async with streamable_http_client(live_server) as (read, write):
         async with ClientSession(read, write) as session:
             init_result = await session.initialize()
             # FastMCP advertises a server name derived from FastMCP(name="zeeker")
-            assert init_result.serverInfo.name, "initialize returned empty serverInfo.name"
+            assert init_result.server_info.name, "initialize returned empty serverInfo.name"
             tools_result = await session.list_tools()
             tool_names = [t.name for t in tools_result.tools]
             assert "list_databases" in tool_names, (
@@ -48,24 +48,24 @@ async def test_streamable_http_handshake_and_list_tools(live_server):
 async def test_two_independent_sessions(live_server):
     """TRANSPORT-03: Server is stateless — two independent sessions succeed.
 
-    Opens two SEPARATE streamablehttp_client contexts back-to-back. Each runs
+    Opens two SEPARATE streamable_http_client contexts back-to-back. Each runs
     initialize independently. Both must succeed and return list_databases in
     tools/list. This proves sessions do not share or contaminate each other's state.
     """
     # Session 1
-    async with streamablehttp_client(live_server) as (read1, write1, _get_sid1):
+    async with streamable_http_client(live_server) as (read1, write1):
         async with ClientSession(read1, write1) as session1:
             init1 = await session1.initialize()
-            assert init1.serverInfo.name, "Session 1 initialize failed"
+            assert init1.server_info.name, "Session 1 initialize failed"
             tools1 = await session1.list_tools()
             names1 = {t.name for t in tools1.tools}
             assert "list_databases" in names1, "Session 1 tools/list missing list_databases"
 
     # Session 2 — separate context; no shared state with Session 1
-    async with streamablehttp_client(live_server) as (read2, write2, _get_sid2):
+    async with streamable_http_client(live_server) as (read2, write2):
         async with ClientSession(read2, write2) as session2:
             init2 = await session2.initialize()
-            assert init2.serverInfo.name, "Session 2 initialize failed"
+            assert init2.server_info.name, "Session 2 initialize failed"
             tools2 = await session2.list_tools()
             names2 = {t.name for t in tools2.tools}
             assert "list_databases" in names2, "Session 2 tools/list missing list_databases"

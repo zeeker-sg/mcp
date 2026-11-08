@@ -49,7 +49,7 @@ from typing import Annotated
 
 import structlog
 from fastmcp.exceptions import ToolError
-from fastmcp.tools.tool import ToolAnnotations
+from mcp.types import ToolAnnotations
 from pydantic import BeforeValidator, Field
 
 from mcp_zeeker import config
@@ -103,9 +103,9 @@ _QUERY_TABLE_DESCRIPTION = (
     name="query_table",
     description=_QUERY_TABLE_DESCRIPTION,
     annotations=ToolAnnotations(
-        readOnlyHint=True,
-        idempotentHint=True,
-        openWorldHint=True,
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=True,
     ),
 )
 async def query_table(
@@ -671,9 +671,9 @@ _FETCH_DESCRIPTION = (
     name="fetch",
     description=_FETCH_DESCRIPTION,
     annotations=ToolAnnotations(
-        readOnlyHint=True,
-        idempotentHint=True,
-        openWorldHint=True,
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=True,
     ),
 )
 async def fetch(
