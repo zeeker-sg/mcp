@@ -16,13 +16,13 @@ from mcp.client.streamable_http import streamable_http_client
 
 
 async def capture(url):
-    async with streamable_http_client(url) as (read, write, _):
+    async with streamable_http_client(url) as (read, write):
         async with ClientSession(read, write) as session:
             initialized = await session.initialize()
-            if initialized.serverInfo.name != "zeeker":
-                raise RuntimeError(f"Unexpected MCP server: {initialized.serverInfo.name}")
+            if initialized.server_info.name != "zeeker":
+                raise RuntimeError(f"Unexpected MCP server: {initialized.server_info.name}")
             result = await session.list_tools()
-            if result.nextCursor is not None or len(result.tools) != 6:
+            if result.next_cursor is not None or len(result.tools) != 6:
                 raise RuntimeError("Expected a single MCP response containing all six tools")
             return [
                 tool.model_dump(mode="json")
