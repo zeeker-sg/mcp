@@ -24,7 +24,7 @@ NEVER appear in any of:
                                               on "x"*100 to avoid false-positive
                                               matches inside captured fixtures)
 4. ZEEKER_CANARY_42                        — plain round-trip detector
-5. "\udc80"                                — lone surrogate (UTF-8 boundary)
+5. "\\udc80"                                — lone surrogate (UTF-8 boundary)
 
 2 paths:
 - success: handler dispatches; per-table FTS returns the captured judgments

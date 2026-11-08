@@ -227,7 +227,7 @@ async def test_execute_sql_error_contract(
 
 _FTS_INFO = {("dbA", "t1"): ("t1_fts", ["title", "summary"])}
 
-_TEN_KEYS = {
+_ROW_KEYS = {
     "title",
     "date",
     "summary",
@@ -238,7 +238,10 @@ _TEN_KEYS = {
     "license_url",
     "_citation",
     "_score",
+    "match_context",
 }
+# Back-compat alias — several tests below reference the historical name.
+_TEN_KEYS = _ROW_KEYS
 
 
 async def test_sql_path_rows_normalized_with_score(

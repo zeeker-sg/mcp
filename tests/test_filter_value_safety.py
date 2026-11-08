@@ -17,7 +17,7 @@ this test enforces that contract end-to-end.
 2. NEAR('data' 'protection') AND NOT       — FTS5-operator string
 3. "x" * 5001                              — 5 KB oversized payload
 4. ZEEKER_CANARY_42                        — plain round-trip detector
-5. "\udc80"                                — lone surrogate (UTF-8 boundary)
+5. "\\udc80"                                — lone surrogate (UTF-8 boundary)
 
 2 error paths through compile_filters:
 - coercion failure (gt on INTEGER column with non-numeric value)
