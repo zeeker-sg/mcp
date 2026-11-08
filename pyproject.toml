@@ -9,7 +9,7 @@ dependencies = [
     "httpx~=0.28",
     "starlette>=0.41,<2",
     "uvicorn~=0.46",
-    "structlog~=25.5",
+    "structlog>=25.5,<27.0",
 ]
 
 [dependency-groups]
