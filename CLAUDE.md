@@ -11,7 +11,7 @@ A read-only remote MCP server at `mcp.zeeker.sg` that exposes the curated Singap
 
 - **Tech stack**: Python (managed with `uv`, pinned via `pyproject.toml` + `uv.lock`). FastMCP over Starlette/Uvicorn for MCP/HTTP. `httpx.AsyncClient` for upstream. `pydantic` for schema. No ORM, no DB driver — Why: small, audited dependency footprint and zero local state simplifies review and security posture for registry submission.
 - **Tooling**: Black formatter, Ruff linter, Pytest test runner — Why: matches the conventions expected by Anthropic's open-source review.
-- **Read-only**: No write paths anywhere — Why: lowers blast radius, simplifies registry review, matches the "primary sources" use case.
+- **Read-only server**: No MCP/HTTP write paths. The separately invoked private Increment A CLI is the scoped exception authorized for development on 1 November 2026: standard-library SQLite, explicit private directory outside Git, no registry imports/mounts in server startup, no changes to the six public tools. Real-data and production gates remain open. See `docs/identity-registry/IMPLEMENTATION-A.md`.
 - **Performance**: p50 < 300 ms and p95 < 1.5 s for non-fragment tools (server-side); 50 concurrent requests handled in a single process without saturation; < 256 MB resident under steady load — Why: connector latency directly affects the agent loop UX.
 - **Anonymous-tier only in v1**: 20-request burst / 60 per minute / 5,000 per IP per 24h — Why: anonymous access keeps the connector trivially adoptable; upgrade path to API keys is a function-pointer swap.
 - **No data mirror**: Each tool call is a clean request/response cycle against upstream — Why: keeps the server stateless and avoids divergence from `data.zeeker.sg`.

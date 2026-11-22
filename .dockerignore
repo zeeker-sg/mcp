@@ -1,0 +1,9 @@
+# Positive build-context allowlist. Private state is never a build input.
+**
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!src/
+src/**
+!src/**/*.py
+**/__pycache__/

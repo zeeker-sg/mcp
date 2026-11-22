@@ -10,6 +10,18 @@ response is citation-ready, scope-bounded, and safe to feed back into an LLM —
 attached, hidden internal data stripped, retrieved third-party text labeled as data rather
 than instructions.
 
+## Private identity development (Increment A)
+
+The separate `zeeker-identity` CLI is an opt-in, metadata-only development component.
+It uses standard-library SQLite and writes only to an explicitly selected private
+directory outside Git. The MCP server remains stateless and read-only, exposes the
+same six tools, and never imports or initializes the registry. There is no resolver
+endpoint or public identity allocator in Increment A.
+
+Synthetic development is authorized; real fixture custody, metadata-use/storage
+policy, recovery policy, human identity decisions and independent acceptance remain
+operator gates. See [the Increment A operator/development notes](docs/identity-registry/IMPLEMENTATION-A.md).
+
 ## Quick start
 
 Local development:

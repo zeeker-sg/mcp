@@ -1,4 +1,4 @@
-"""
+r"""
 Hostile-input canary corpus for cross-DB search — GREEN (Plan 04-03 Task 2).
 
 Mirrors `tests/test_filter_value_safety.py` (Phase 3 / D3-09 / INJ-05) for

@@ -74,8 +74,8 @@ METADATA_STUB = {
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-skip @pytest.mark.live tests unless ZEEKER_LIVE env var is set."""
-    if not os.getenv("ZEEKER_LIVE"):
+    """Auto-skip @pytest.mark.live tests unless ZEEKER_LIVE=1."""
+    if os.getenv("ZEEKER_LIVE") != "1":
         skip_live = pytest.mark.skip(reason="Set ZEEKER_LIVE=1 to run live tests")
         for item in items:
             if item.get_closest_marker("live"):
