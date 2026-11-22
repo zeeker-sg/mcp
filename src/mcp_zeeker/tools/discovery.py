@@ -14,15 +14,23 @@ would create a detectable side-channel (Pitfall 1).
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
+from time import perf_counter
 from typing import Annotated
 
 import structlog
+from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import ToolAnnotations
 from pydantic import Field
 
 from mcp_zeeker import config
 from mcp_zeeker.core.config_lookup import hidden_columns_for, url_column_for
-from mcp_zeeker.core.datasette_client import DatasetteClient
+from mcp_zeeker.core.datasette_client import (
+    DatabaseSummary,
+    DatasetteClient,
+    QueryTimeoutError,
+    UpstreamCallFailed,
+)
 from mcp_zeeker.core.envelope import Envelope
 from mcp_zeeker.core.metadata_cache import MetadataCache
 from mcp_zeeker.core.visibility import (
@@ -49,9 +57,13 @@ __all__ = [
 
 log = structlog.get_logger()
 
+# Wall-clock ceiling for each full metadata probe (including any HTTP retry).
+_DATABASE_DISCOVERY_TIMEOUT_S = 12.0
+
 _DESCRIPTION = (
-    "List the four Singapore legal databases available on data.zeeker.sg, "
+    "List Singapore legal databases on data.zeeker.sg, "
     "with one-line descriptions and visible table counts. "
+    "If the complete catalog is unavailable, names the failed databases. "
     "Rate limits: 20/burst, 60/minute, 5000/day per IP. " + config.TOOL_TRAILER
 )
 
@@ -100,6 +112,83 @@ def _supports_fragments(database: str, table: str) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class _DatabaseProbe:
+    summary: DatabaseSummary | None
+    elapsed_ms: float
+    reason: str | None = None
+    failure_type: str | None = None
+    cause_type: str | None = None
+    upstream_status: int | None = None
+
+
+async def _database_probe(client: DatasetteClient, name: str) -> _DatabaseProbe:
+    """Observe metadata or a fixed failure label without retaining exception text."""
+    started = perf_counter()
+    try:
+        async with asyncio.timeout(_DATABASE_DISCOVERY_TIMEOUT_S):
+            summary = await client.get_database(name)
+    except Exception as exc:
+        # CancelledError is a BaseException: caller cancellation still propagates.
+        if isinstance(exc, (TimeoutError, QueryTimeoutError)):
+            reason = "timed out"
+        elif isinstance(exc, UpstreamCallFailed):
+            reason = "upstream unavailable"
+        elif isinstance(exc, ValueError):
+            reason = "invalid upstream response"
+        else:
+            reason = "probe failed"
+        return _DatabaseProbe(
+            summary=None,
+            elapsed_ms=round((perf_counter() - started) * 1000, 2),
+            reason=reason,
+            failure_type=type(exc).__name__,
+            cause_type=type(exc.__cause__).__name__ if exc.__cause__ is not None else None,
+            upstream_status=exc.status if isinstance(exc, UpstreamCallFailed) else None,
+        )
+    return _DatabaseProbe(summary, round((perf_counter() - started) * 1000, 2))
+
+
+async def _database_summaries(client: DatasetteClient) -> list[DatabaseSummary]:
+    """Probe concurrently, then keep the legacy complete-or-error contract."""
+    # The allowlist bounds fan-out and starts with Judgements. TaskGroup drains
+    # children on caller cancellation; reports stay in the allowlist order.
+    databases = config.ALLOWED_DATABASES
+    async with asyncio.TaskGroup() as group:
+        tasks = [group.create_task(_database_probe(client, name)) for name in databases]
+    probes = [task.result() for task in tasks]
+    request_id = structlog.contextvars.get_contextvars().get("request_id")
+    # On incomplete calls, successful sibling timings are part of the failure
+    # receipt and must survive deployments with INFO logging filtered out.
+    write_probe = log.warning if any(probe.reason is not None for probe in probes) else log.info
+    summaries = []
+    failed = []
+    responded = []
+    for name, probe in zip(databases, probes, strict=True):
+        write_probe(
+            "discovery_database_probe",
+            tool="list_databases",
+            database=name,
+            elapsed_ms=probe.elapsed_ms,
+            request_id=request_id,
+            outcome="failed" if probe.reason is not None else "ok",
+            failure_type=probe.failure_type,
+            cause_type=probe.cause_type,
+            upstream_status=probe.upstream_status,
+        )
+        if probe.summary is None:
+            failed.append(f"{name} ({probe.reason})")
+        else:
+            summaries.append(probe.summary)
+            responded.append(name)
+    if failed:
+        raise ToolError(
+            "upstream_unavailable: Database catalog not returned. "
+            f"Failed: {', '.join(failed)}. Responded: {', '.join(responded) or 'none'}."
+        )
+    return summaries
+
+
 # ---------------------------------------------------------------------------
 # Registered tool handlers
 # ---------------------------------------------------------------------------
@@ -125,10 +214,7 @@ async def list_databases() -> Envelope:
     attribution for the actual posture.
     """
     client = DatasetteClient.current()
-    summaries = await asyncio.gather(
-        *(client.get_database(name) for name in config.ALLOWED_DATABASES),
-        return_exceptions=False,
-    )
+    summaries = await _database_summaries(client)
     rows = []
     # MetadataCache binding is guaranteed in production by app.py lifespan; in
     # direct-handler-call unit tests (tests/tools/test_discovery.py) the cache

@@ -8,7 +8,7 @@ is Plan 05's smoke test).
 Covers:
 - DISC-01: 4 rows, names match ALLOWED_DATABASES, description, table_count.
 - D-11: table_count math — visible = total minus HIDDEN_TABLES entries.
-- D-17: UpstreamCallFailed propagated on upstream error.
+- D-17: attributed ToolError when the catalog cannot be completed.
 - D-01: list_tables stub raises NotImplementedError (unregistered until Phase 2).
 """
 
@@ -17,9 +17,10 @@ from __future__ import annotations
 import httpx
 import pytest
 import pytest_httpx
+from fastmcp.exceptions import ToolError
 
 from mcp_zeeker import config
-from mcp_zeeker.core.datasette_client import DatasetteClient, UpstreamCallFailed
+from mcp_zeeker.core.datasette_client import DatasetteClient
 from mcp_zeeker.tools.discovery import list_databases
 
 
@@ -115,16 +116,20 @@ async def test_list_databases(
     assert envelope.provenance.source == "data.zeeker.sg"
 
 
-async def test_list_databases_propagates_upstream_failure(
+async def test_list_databases_names_all_upstream_failures(
     httpx_mock: pytest_httpx.HTTPXMock, bound_client: DatasetteClient
 ) -> None:
-    """D-17: UpstreamCallFailed propagates when one upstream DB returns 500."""
-    # Stub first DB with 500; remaining DBs may or may not be called (gather short-circuits)
+    """D-17: If all databases fail, no empty or partial catalog is emitted."""
     for db in config.ALLOWED_DATABASES:
         httpx_mock.add_response(url=_db_url(db), status_code=500)
 
-    with pytest.raises(UpstreamCallFailed):
+    with pytest.raises(ToolError) as exc_info:
         await list_databases()
+
+    message = str(exc_info.value)
+    assert message.startswith("upstream_unavailable: Database catalog not returned.")
+    assert all(f"{db} (upstream unavailable)" in message for db in config.ALLOWED_DATABASES)
+    assert message.endswith("Responded: none.")
 
 
 @pytest.mark.skip(reason="Phase 2 implements list_tables — see test_list_tables.py")
