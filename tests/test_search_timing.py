@@ -78,9 +78,17 @@ def _stub_dbs(httpx_mock: pytest_httpx.HTTPXMock) -> None:
 
 
 def _stub_all_dbs(httpx_mock: pytest_httpx.HTTPXMock) -> None:
-    """Stub all four ALLOWED_DATABASES (for default-databases search)."""
+    """Stub all four ALLOWED_DATABASES (for default-databases search).
+
+    DBs outside SEARCH_DEFAULT_DATABASES are `is_optional` — the default
+    search scope no longer fetches them."""
     for db in config.ALLOWED_DATABASES:
-        httpx_mock.add_response(url=_db_url(db), json=_empty_db_payload(), is_reusable=True)
+        httpx_mock.add_response(
+            url=_db_url(db),
+            json=_empty_db_payload(),
+            is_reusable=True,
+            is_optional=db not in config.SEARCH_DEFAULT_DATABASES,
+        )
 
 
 def _stub_table_response(httpx_mock: pytest_httpx.HTTPXMock) -> None:

@@ -461,3 +461,88 @@ def test_judgments_maxp_sql_finds_the_body_only_match() -> None:
     assert rows[0]["case_name"] == "GOH BIN SENG v YEO NENG JIAN STEPHEN"
     assert rows[0]["_score"] < 0
     assert "content_text" not in rows[0].keys()
+
+
+# ---------------------------------------------------------------------------
+# match_context — snippet() must execute and quote the right passage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("key", _searchable_table_keys())
+def test_bm25_sql_snippet_quotes_the_match(key: str) -> None:
+    """`_snippet` is computed by a rowid-pinned FTS re-entry on the top rows;
+    it must execute (same aux-function context rule as bm25) and contain the
+    matched term."""
+    db, _, table = key.partition(".")
+    fts_columns = list(config.SEARCH_BM25_WEIGHTS[key])
+    columns = _table_columns(db, table, fts_columns)
+    preview = resolve_preview_columns(db, table, set(columns))
+    assert preview is not None
+
+    con = _connect()
+    fts_table = _build_table_fixture(con, table, columns, fts_columns)
+    sql, params = build_bm25_sql(
+        db, table, fts_table, fts_columns, preview, escape_user_query(_MATCHING_TERM), 20
+    )
+    rows = _rows(con, sql, params)
+
+    assert rows and _MATCHING_TERM in rows[0]["_snippet"]
+
+
+def test_maxp_sql_snippet_comes_from_the_best_passage() -> None:
+    """The parent's `_snippet` quotes the passage that earned its MaxP score,
+    not an arbitrary matching passage of the same parent."""
+    con = _judgments_fixture()
+    # Weaker passages for j1 (one mention in a long paragraph) on BOTH sides
+    # of the best passage's rowid (1), so neither "first row" nor "last row"
+    # can pass for the MaxP pick — only the min()-row bare-column rule can.
+    weak = "a long paragraph " + "filler words " * 40 + f"with one {_MATCHING_TERM}"
+    for rowid in (0, 2):
+        con.execute(
+            "INSERT INTO judgments_fragments(rowid, id, judgment_id, ordinal, content_text) "
+            "VALUES (?, ?, 'j1', ?, ?)",
+            (rowid, f"w{rowid}", rowid, weak),
+        )
+        con.execute(
+            "INSERT INTO judgments_fragments_fts(rowid, content_text) VALUES (?, ?)",
+            (rowid, weak),
+        )
+    con.commit()
+    source = FragmentSource(
+        fragment_table="judgments_fragments",
+        fragment_fts="judgments_fragments_fts",
+        fragment_fts_columns=["content_text"],
+        parent_table="judgments",
+        parent_link="judgment_id",
+        parent_key="id",
+        preview={"title": "case_name", "date": "decision_date", "summary": "summary"},
+    )
+    sql, params = build_maxp_sql("zeeker-judgements", source, escape_user_query(_MATCHING_TERM), 20)
+    rows = _rows(con, sql, params)
+
+    assert len(rows) == 1
+    assert rows[0]["_snippet"] == f"paragraph discussing {_MATCHING_TERM} at length"
+
+
+def test_snippet_token_budget_is_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bad SEARCH_SNIPPET_TOKENS can never widen the extract past FTS5's 64."""
+    from mcp_zeeker.core.search import _snippet_expr
+
+    monkeypatch.setattr(config, "SEARCH_SNIPPET_TOKENS", 10_000)
+    assert _snippet_expr('"f"').endswith(", 64)")
+    monkeypatch.setattr(config, "SEARCH_SNIPPET_TOKENS", 0)
+    assert _snippet_expr('"f"').endswith(", 1)")
+    monkeypatch.setattr(config, "SEARCH_SNIPPET_TOKENS", "wide")
+    assert _snippet_expr('"f"').endswith(", 24)")
+
+
+def test_clean_snippet_collapses_whitespace_and_caps_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp_zeeker.core.search import _clean_snippet
+
+    assert _clean_snippet("a\n\tb   c") == "a b c"
+    assert _clean_snippet("   ") is None
+    assert _clean_snippet(None) is None
+    monkeypatch.setattr(config, "SEARCH_SNIPPET_MAX_CHARS", 10)
+    assert _clean_snippet("abcdefghij klmnop") == "abcdefghij …"

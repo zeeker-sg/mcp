@@ -290,6 +290,47 @@ def _bm25_weight_literals(db: str, table: str, fts_columns: list[str]) -> list[s
     return literals
 
 
+def _snippet_expr(fts_quoted: str) -> str:
+    """FTS5 snippet() expression for the `match_context` extract.
+
+    `snippet(<fts>, -1, '', '', ' … ', N)`: column index -1 auto-selects the
+    best-matching indexed column; empty before/after markers (no highlight
+    markup — the extract is document text, never decorated); ' … ' ellipsis.
+    N comes from config.SEARCH_SNIPPET_TOKENS clamped to [1, 64] (the FTS5
+    ceiling) so a bad config value can never widen the extract. Every literal
+    here is server-controlled — the user query is never part of this
+    expression (INJ-05; it travels only as the bound :search_query).
+
+    Quotation-length by design: token cap here, char cap at normalization
+    (config.SEARCH_SNIPPET_MAX_CHARS) — the fair-dealing posture that lets
+    `match_context` coexist with process-only content policies (the extract
+    shows WHY a row matched; it does not redistribute document text).
+    """
+    tokens = config.SEARCH_SNIPPET_TOKENS
+    if not isinstance(tokens, int) or isinstance(tokens, bool):
+        tokens = 24
+    tokens = max(1, min(64, tokens))
+    return f"snippet({fts_quoted}, -1, '', '', ' … ', {tokens})"
+
+
+def _snippet_subquery(fts_quoted: str, rowid_ref: str) -> str:
+    """Scalar subquery computing `match_context` for ONE already-ranked row.
+
+    snippet() is an FTS5 auxiliary function with the same cursor-context rule
+    as bm25() (WR-260829): it cannot sit in a SELECT with a window function,
+    an aggregate, or a buffered sort. Rather than computing it for EVERY
+    match in the innermost `_hits` level (expensive on the largest corpora —
+    snippet tokenizes the column text), the outermost level re-enters the FTS
+    index once per surviving top-<n> row: `MATCH :search_query AND rowid = X`
+    is a direct full-text query positioned on exactly that row, so snippet()
+    is legal and runs at most `per_table_limit` times.
+    """
+    return (
+        f"(SELECT {_snippet_expr(fts_quoted)} FROM {fts_quoted} "
+        f"WHERE {fts_quoted} MATCH :search_query AND {fts_quoted}.rowid = {rowid_ref})"
+    )
+
+
 def _search_select_columns(
     db: str,
     table: str,
@@ -341,7 +382,10 @@ def build_bm25_sql(
 
     Shape (three levels — the nesting is LOAD-BEARING, see below):
       SELECT <preview cols + citation-placeholder cols, table-qualified>,
-             _ranked._score AS _score, _ranked._total AS _total
+             _ranked._score AS _score, _ranked._total AS _total,
+             (SELECT snippet(<fts>, ...) FROM <fts>
+              WHERE <fts> MATCH :search_query
+                AND <fts>.rowid = _ranked._rid) AS _snippet
       FROM (SELECT _hits._rid AS _rid, _hits._score AS _score,
                    count(*) OVER () AS _total
             FROM (SELECT rowid AS _rid, bm25(<fts>, w1, ...) AS _score
@@ -411,7 +455,8 @@ def build_bm25_sql(
     )
     sql = (
         f"SELECT {select_list}, "  # noqa: S608 — identifiers from upstream metadata only
-        f"_ranked._score AS _score, _ranked._total AS _total "
+        f"_ranked._score AS _score, _ranked._total AS _total, "
+        f"{_snippet_subquery(fq, '_ranked._rid')} AS _snippet "
         f"FROM ({ranked}) _ranked "
         f"JOIN {tq} ON {tq}.rowid = _ranked._rid "
         f"ORDER BY _score ASC LIMIT {n}"
@@ -547,9 +592,13 @@ def build_maxp_sql(
     Shape (MaxP: best passage per parent document — three levels, the nesting
     is LOAD-BEARING for the same reason as `build_bm25_sql`):
       SELECT p.<parent preview + citation-placeholder cols>,
-             _parents._score AS _score, _parents._total AS _total
+             _parents._score AS _score, _parents._total AS _total,
+             (SELECT snippet(<frag_fts>, ...) FROM <frag_fts>
+              WHERE <frag_fts> MATCH :search_query
+                AND <frag_fts>.rowid = _parents._best_rid) AS _snippet
       FROM (SELECT fr.<parent_link> AS _pid,
                    MIN(_hits._score) AS _score,
+                   _hits._rid AS _best_rid,
                    count(*) OVER () AS _total
             FROM (SELECT rowid AS _rid, bm25(<frag_fts>, w1, ...) AS _score
                   FROM <frag_fts> WHERE <frag_fts> MATCH :search_query
@@ -572,6 +621,11 @@ def build_maxp_sql(
       subquery-flattening optimization that would undo the separation.
     - bm25() is NEGATIVE (best = most negative) → MIN() picks each parent's
       BEST passage score (that's the MaxP), and ORDER BY ASC ranks parents.
+    - `_hits._rid AS _best_rid` is a bare column beside the sole MIN()
+      aggregate, so SQLite takes it from the row that produced the minimum
+      (documented behavior) — the parent's best-matching passage. The
+      `_snippet` subquery re-enters the fragment FTS index on that rowid, so
+      `match_context` quotes the passage that earned the parent its rank.
     - Grouping is on the FRAGMENT's link column, not the parent pk, so the
       parent table is joined only for the top `<n>` groups.
     - `count(*) OVER ()` runs AFTER grouping and BEFORE LIMIT → the number of
@@ -602,6 +656,7 @@ def build_maxp_sql(
     # Middle level: MaxP rollup per parent + distinct-parent count, no bm25 call.
     parents = (
         f"SELECT fr.{link} AS _pid, MIN(_hits._score) AS _score, "  # noqa: S608
+        f"_hits._rid AS _best_rid, "
         f"count(*) OVER () AS _total "
         f"FROM ({hits}) _hits "
         f"JOIN {frq} fr ON fr.rowid = _hits._rid "
@@ -610,12 +665,35 @@ def build_maxp_sql(
     )
     sql = (
         f"SELECT {select_list}, "  # noqa: S608 — identifiers from config/upstream metadata only
-        f"_parents._score AS _score, _parents._total AS _total "
+        f"_parents._score AS _score, _parents._total AS _total, "
+        f"{_snippet_subquery(fq, '_parents._best_rid')} AS _snippet "
         f"FROM ({parents}) _parents "
         f"JOIN {pq} p ON p.{pk} = _parents._pid "
         f"ORDER BY _score ASC LIMIT {n}"
     )
     return sql, {"search_query": escaped_query}
+
+
+def _clean_snippet(raw: object) -> str | None:
+    """Normalize a raw upstream `_snippet` value for the `match_context` field.
+
+    Collapses internal whitespace (snippet() preserves source newlines/tabs)
+    and applies the config.SEARCH_SNIPPET_MAX_CHARS belt-and-suspenders cap —
+    the char-level guarantee that `match_context` stays quotation-length even
+    when snippet()'s token budget spans pathologically long tokens. Non-string
+    or empty values collapse to None so the row shape stays uniform.
+    """
+    if not isinstance(raw, str):
+        return None
+    cleaned = " ".join(raw.split())
+    if not cleaned:
+        return None
+    max_chars = config.SEARCH_SNIPPET_MAX_CHARS
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:
+        max_chars = 300
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars].rstrip() + " …"
+    return cleaned
 
 
 def _normalize_search_rows(
@@ -628,9 +706,12 @@ def _normalize_search_rows(
 ) -> list[dict]:
     """Normalize raw upstream rows to the fixed search row shape (D4-12 / D4-21).
 
-    Emits EXACTLY 10 keys per row (Phase 6 extended the original 6-key shape
+    Emits EXACTLY 11 keys per row (Phase 6 extended the original 6-key shape
     with license / license_url / citation per D6-03 + D6-05; issue #12 adds
-    `_score`). resolve_preview_columns already filtered HEAVY_COLUMNS at
+    `_score`; the match-context feature adds `match_context` — a
+    quotation-length FTS5 snippet() extract showing WHY the row matched,
+    char-capped via _clean_snippet, None on the legacy path and whenever
+    upstream returned no `_snippet`). resolve_preview_columns already filtered HEAVY_COLUMNS at
     resolution time (defense-in-depth — D3-04 / D4-12 / Plan 04-01), so heavy
     columns cannot be inlined here even if upstream returned them. The
     whitelist reshape below naturally strips any extra upstream columns —
@@ -677,6 +758,12 @@ def _normalize_search_rows(
                 # Issue #12: raw negative bm25 score (best = most negative);
                 # None on the legacy path (no ranking signal upstream).
                 "_score": float(raw_score) if raw_score is not None else None,
+                # Quotation-length snippet() extract showing why the row
+                # matched (best-matching indexed column; best passage on the
+                # fragment path). None on legacy (no SQL context upstream).
+                # This is upstream DOCUMENT TEXT — the envelope's data-not-
+                # instructions labeling covers it like every other text field.
+                "match_context": _clean_snippet(r.get("_snippet")) if scored else None,
                 # D6-03: per-row license + license_url. Empty-string license_url
                 # collapses to None for clean wire payload.
                 "license": license_text,

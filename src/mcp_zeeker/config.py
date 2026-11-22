@@ -21,6 +21,24 @@ ALLOWED_DATABASES: tuple[str, ...] = (
     "sg-law-cookies",
 )
 
+# Default scope for the search tool when the caller omits `databases`.
+# Deliberately NARROWER than ALLOWED_DATABASES: the crown-jewel corpora
+# (court judgments, curated commentaries, SG Law Cookies summaries) get the
+# whole fan-out latency budget and all the result slots, instead of
+# competing with ~9 small specialist tables (pdpc + the 8 sg-gov-newsrooms
+# feeds) that dilute both and were observed starving the judgments dispatch
+# under the 0.8s budget.
+# The specialist databases stay fully searchable — one explicit
+# `databases=["pdpc"]` away; the tool description advertises them so LLM
+# callers know to widen scope. MUST be a subset of ALLOWED_DATABASES
+# (the unknown_database gate validates against ALLOWED_DATABASES, so a
+# typo here would fail loudly, not silently).
+SEARCH_DEFAULT_DATABASES: tuple[str, ...] = (
+    "zeeker-judgements",
+    "sglawwatch",
+    "sg-law-cookies",
+)
+
 DATABASE_DESCRIPTIONS: dict[str, str] = {
     "zeeker-judgements": (
         "Singapore court judgments — High Court, Court of Appeal, and subordinate courts."
@@ -978,3 +996,21 @@ FTS_WARMER_TIMEOUT_S: float = (
 # in. The value travels ONLY as the bound :search_query parameter (INJ-05);
 # it never appears in the SQL text.
 FTS_WARM_QUERY: str = os.getenv("FTS_WARM_QUERY", "contract")
+
+# ---------------------------------------------------------------------------
+# Match-context snippets (search rows — SQL-ranked paths only)
+# ---------------------------------------------------------------------------
+
+# FTS5 snippet() token budget for the per-row `match_context` extract. The
+# extract exists so a caller can verify WHY a row matched without the server
+# redistributing full document text: quotation-length only, per the
+# fair-dealing posture (Singapore Copyright Act 2021 ss 190-194) — provenance
+# and per-row license/citation already accompany every row. FTS5 caps this at
+# 64 tokens; the SQL builders clamp to [1, 64] defensively so a bad env/config
+# value can never widen the extract beyond FTS5's own ceiling.
+SEARCH_SNIPPET_TOKENS: int = 24
+
+# Character-level belt-and-suspenders cap applied at row normalization AFTER
+# snippet() (tokens can be long — URLs, unbroken cites). Keeps `match_context`
+# unambiguously quotation-length even in pathological token streams.
+SEARCH_SNIPPET_MAX_CHARS: int = 300

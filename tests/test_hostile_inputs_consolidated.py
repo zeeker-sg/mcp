@@ -24,10 +24,10 @@ Implementation notes:
   `_search=<canary>` (that's how FTS dispatch works); the contract under
   test is "Zeeker's OWN log emissions never echo".
 
-- Lone-surrogate canary `"\udc80"` triggers UnicodeEncodeError in httpx URL
+- Lone-surrogate canary `"\\udc80"` triggers UnicodeEncodeError in httpx URL
   encoding before the request reaches upstream (the handler never gets a
   response). The error escapes the anyio task group as an ExceptionGroup;
-  `str(eg)` includes `\udc80` repr by Python's machinery. INJ-05 invariant
+  `str(eg)` includes `\\udc80` repr by Python's machinery. INJ-05 invariant
   is narrowed to channels Zeeker controls (envelope, stdout, stderr,
   mcp_zeeker caplog) — the error.__str__ surface is documented carry-
   forward per Phase 4 04-03-SUMMARY / Phase 5 05-04-SUMMARY.
