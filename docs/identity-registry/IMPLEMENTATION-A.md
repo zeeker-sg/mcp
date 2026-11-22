@@ -165,6 +165,31 @@ the registry and does not modify the source.
 Reimport preserves the first stored approval reference. Changing only that pointer
 does not amend the immutable manifest or record a new approval/policy event.
 
+### Verify a pinned import
+
+From the repository root, run the read-only check against the frozen source,
+the original approved contract and the private registry.
+
+```sh
+PYTHONPATH=src python3 scripts/verify_registry_preservation.py \
+  --source "$APPROVED_SOURCE" --contract "$APPROVED_CONTRACT" \
+  --registry-dir "$ZEEKER_REGISTRY_DIR"
+```
+
+The check validates the source pin and compares the stored snapshot manifest and
+every assertion's locator and typed metadata, including duplicate rows. It
+exits nonzero on a mismatch. A successful report gives the measured row count
+and each selected ID or citation field's number of duplicate groups and total
+rows in those groups. It groups exact typed values and skips NULL and
+whitespace-only keys. A field omitted from the contract has no reported count.
+
+Compare those measurements with the expectations frozen for the approved fixture.
+For the historical judgments fixture, the audit recorded 10,996 rows, 15 ID groups
+with 30 participating rows, and 16 citation groups with 32 participating rows.
+An approved replacement uses its own recorded expectations. Keep the aggregate
+report in the private review channel. The preservation result is one input to
+M6 acceptance.
+
 ## Ten-table schema map
 
 | Table | Fields/invariant supplied |

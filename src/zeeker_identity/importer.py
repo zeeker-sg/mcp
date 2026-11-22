@@ -218,11 +218,17 @@ def validate_contract(contract: dict) -> dict:
     return result
 
 
-def import_snapshot(directory, source, contract, *, checkpoint=None) -> dict:
+def scan_pinned_source(source, contract):
+    """Validate an approved contract and return its selected rows from one source scan."""
     contract = validate_contract(contract)
     actual, rows = _scan(source, contract["corpus"], contract["table"], contract["columns"])
     if any(actual[k] != contract[k] for k in actual):
         raise RegistryError("source does not match the pinned import contract")
+    return contract, rows
+
+
+def import_snapshot(directory, source, contract, *, checkpoint=None) -> dict:
+    contract, rows = scan_pinned_source(source, contract)
     identity = {k: v for k, v in contract.items() if k != "approval_reference"}
     snapshot_id = stable_id("snapshot", identity)
     corpus, kind = contract["corpus"], contract["kind"]
