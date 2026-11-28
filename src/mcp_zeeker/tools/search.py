@@ -48,7 +48,7 @@ from typing import Annotated
 
 import structlog
 from fastmcp.exceptions import ToolError
-from fastmcp.tools.tool import ToolAnnotations
+from mcp.types import ToolAnnotations
 from pydantic import BeforeValidator, Field
 
 from mcp_zeeker import config
@@ -109,9 +109,9 @@ _SEARCH_DESCRIPTION = (
     name="search",
     description=_SEARCH_DESCRIPTION,
     annotations=ToolAnnotations(
-        readOnlyHint=True,
-        idempotentHint=True,
-        openWorldHint=True,
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=True,
     ),
 )
 async def search(

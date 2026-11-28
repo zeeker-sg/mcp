@@ -41,11 +41,13 @@ async def test_every_registered_tool_has_required_annotations():
     assert tools, "No tools registered"
     for tool in tools:
         assert tool.annotations is not None, f"tool '{tool.name}' has no annotations"
-        assert tool.annotations.readOnlyHint is True, f"tool '{tool.name}' readOnlyHint is not True"
-        assert tool.annotations.idempotentHint is True, (
+        assert tool.annotations.read_only_hint is True, (
+            f"tool '{tool.name}' readOnlyHint is not True"
+        )
+        assert tool.annotations.idempotent_hint is True, (
             f"tool '{tool.name}' idempotentHint is not True"
         )
-        assert tool.annotations.openWorldHint is True, (
+        assert tool.annotations.open_world_hint is True, (
             f"tool '{tool.name}' openWorldHint is not True"
         )
 
